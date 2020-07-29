@@ -7,20 +7,18 @@ Created on Fri Jun 26 13:01:30 2020
 
 """Vehicles Routing Problem (VRP)."""
 
-import numpy as np
-dat = np.genfromtxt("DistMatMalkow.csv", delimiter = ",")
-
 from ortools.constraint_solver import routing_enums_pb2
 from ortools.constraint_solver import pywrapcp
 
-def py_mTSP(dat, num_days, start_node, max_cost,plot_time):
+def py_mTSP(dat, num_days, start, end, max_cost,plot_time,penalty):
     data = {}
     data['distance_matrix'] = dat
     data['num_vehicles'] = num_days
-    data['depot'] = start_node
+    data['starts'] = start
+    data['ends'] = end
     
     # Create the routing index manager.
-    manager = pywrapcp.RoutingIndexManager(len(data['distance_matrix']),data['num_vehicles'], data['depot'])
+    manager = pywrapcp.RoutingIndexManager(len(data['distance_matrix']),data['num_vehicles'], data['starts'], data['ends'])
     # Create Routing Model.
     routing = pywrapcp.RoutingModel(manager)
 
@@ -30,7 +28,7 @@ def py_mTSP(dat, num_days, start_node, max_cost,plot_time):
         # Convert from routing variable Index to distance matrix NodeIndex.
         from_node = manager.IndexToNode(from_index)
         to_node = manager.IndexToNode(to_index)
-        if(to_node == 20):
+        if(to_node in end): ##need to fix this part
             add = 0
         else:
             add = plot_time
@@ -49,9 +47,15 @@ def py_mTSP(dat, num_days, start_node, max_cost,plot_time):
         max_cost,  # vehicle maximum travel distance
         True,  # start cumul to zero
         dimension_name)
-    # distance_dimension = routing.GetDimensionOrDie(dimension_name)
-    # distance_dimension.SetGlobalSpanCostCoefficient(100)
+        
+    # Allow to drop nodes.
+    for node in range(1, len(data['distance_matrix'])):
+        routing.AddDisjunction([manager.NodeToIndex(node)], penalty)
 
+    distance_dimension = routing.GetDimensionOrDie(dimension_name)
+    distance_dimension.SetGlobalSpanCostCoefficient(100)
+    search_parameters = pywrapcp.DefaultRoutingSearchParameters()
+    search_parameters.time_limit.seconds = 30
     # Setting first solution heuristic.
     search_parameters = pywrapcp.DefaultRoutingSearchParameters()
     search_parameters.first_solution_strategy = (
