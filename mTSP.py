@@ -53,7 +53,7 @@ def py_mTSP(dat, num_days, start, end, max_cost,plot_time,penalty):
         routing.AddDisjunction([manager.NodeToIndex(node)], penalty)
 
     distance_dimension = routing.GetDimensionOrDie(dimension_name)
-    distance_dimension.SetGlobalSpanCostCoefficient(100)
+    distance_dimension.SetGlobalSpanCostCoefficient(2)
     search_parameters = pywrapcp.DefaultRoutingSearchParameters()
     search_parameters.time_limit.seconds = 30
     # Setting first solution heuristic.

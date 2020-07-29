@@ -1,4 +1,5 @@
 ###Heli point sample plan
+## Kiri Daust, July 2020
 library(clhs)
 library(sf)
 library(raster)
@@ -26,6 +27,9 @@ slopeAdjust <- function(slope){1+((slope-25)*0.02)}
 slope_raster <-  grep("^slope", list.files(datLoc))
 slope <- raster(list.files(datLoc, full.name = TRUE)[slope_raster])
 
+# read in already sampled locations
+included <- st_read(paste0(datLoc,"/ESSF_samples.gpkg"))
+
 boundary <- st_read(paste0(datLoc,"/bec_edited.gpkg"))
 boundary <- boundary[,"MAP_LABEL"]
 boundary <- boundary[grep("ESSF",boundary$MAP_LABEL),]
@@ -47,18 +51,49 @@ names(cost) <- "cost"
 
 tr <- transition(cost, transitionFunction = function(x) 1/mean(x), directions = 8) 
 
-acost <- accCost(tr, start)
-plot(acost)
+## sliced
+getSample <- function(index){
+  acost <- accCost(tr, start[index,])
+  
+  tempBuff <- st_buffer(heliDrop[index,],dist = 4000)
+  tempBuffR <- fasterize(tempBuff, acost)
+  acost <- mask(acost, tempBuffR, updatevalue = 10000)
+  lays <- stack(ancDat,acost)
+  names(lays) <- c("DAH","LFC","MRVBF","DEM","cost")
+  
+  s <- sampleRegular(lays , size = 500000, sp = TRUE) # sample raster
+  s <- s[!is.na(s$DAH) & !is.infinite(s$cost),]
+  return(s)
+}
 
+s <- getSample(2)
+spoints <- clhs(s,size = 5, cost = "cost", iter = 5000, simple = F,progress = T)
+for(site in 2:10) {
+  prevSampled <- spoints$sampled_data
+  s <- getSample(site)
+  s <- rbind(prevSampled,s)
+  spoints <- clhs(s,size = length(prevSampled)+5,include = 1:length(prevSampled), 
+                  cost = "cost", iter = 5000, simple = F,progress = T)
+}
+
+### unsliced
+acost <- accCost(tr, start)
 lays <- stack(ancDat,acost)
 names(lays) <- c("DAH","LFC","MRVBF","DEM","cost")
 
 s <- sampleRegular(lays , size = 500000, sp = TRUE) # sample raster
 s <- s[!is.na(s$DAH) & !is.infinite(s$cost),]
-#s@data <- cbind(s@data,s@coords)
+included <- st_transform(included, st_crs(s))
+incPnts <- raster::extract(lays, included, sp = T)
+incPnts <- incPnts[,-(1:3)]
+s <- rbind(incPnts, s)
 
-spoints <- clhs(s,size = 50, cost = "cost", iter = 5000, simple = F,progress = T)
+spoints <- clhs(s,size = length(incPnts)+25,include = 1:length(incPnts), 
+                cost = "cost", iter = 5000, simple = F,progress = T)
+
 pnts <- spoints$sampled_data
+pnts <- pnts[-((length(pnts)-length(incPnts)+1):length(pnts)),]
+plot(acost)
 plot(pnts, add = T)
 p2 <- st_as_sf(pnts)
 heliDrop <- st_zm(heliDrop)
@@ -75,8 +110,11 @@ dMat2 <- dMat2*60
 dMat2[is.infinite(dMat2)] <- 1000
 
 source_python("./mTSP.py")
-vrp <- py_mTSP(dat = dMat2,num_days = 20L, start = c(50:59,50:59), end = c(50:59,50:59), max_cost = 8L*60L, plot_time = 45L)
-vrp <- py_mTSP(dat = dMat2,num_days = 10L, start = 50:59, end = 50:59, max_cost = 9L*60L, plot_time = 45L, penalty = 500L)
+vrp <- py_mTSP(dat = dMat2,num_days = 20L, start = c(50:59,50:59), 
+               end = c(50:59,50:59), max_cost = 8L*60L, plot_time = 45L,penalty = 500L)
+
+vrp <- py_mTSP(dat = dMat2,num_days = 10L, start = 25:34, end = 25:34, 
+               max_cost = 5L*60L, plot_time = 45L, penalty = 5L*60L)
 
 result <- vrp[[1]]
 
@@ -98,7 +136,7 @@ paths <- foreach(j = 0:(length(result)-1), .combine = rbind) %do% {
   
 }
 
-st_write(paths, dsn = "Heli_DropAllowed.gpkg", layer = "Paths", append = T, driver = "GPKG")  
+st_write(paths, dsn = "Heli_Included_ShortDay.gpkg", layer = "Paths", append = T, driver = "GPKG")  
 
 p2$PID <- seq_along(p2$DAH)
 p2 <- p2[,"PID"]
@@ -110,5 +148,5 @@ for(i in 0:(length(result)-1)){
   p2$DropLoc[p1] <- i
   p2$Order[p1] <- 1:(length(p1))
 }
-st_write(p2, dsn = "Heli_DropAllowed.gpkg",layer = "Points", append = T,overwrite = T, driver = "GPKG")
+st_write(p2, dsn = "Heli_Included_ShortDay.gpkg",layer = "Points", append = T,overwrite = T, driver = "GPKG")
 writeRaster(acost, "CostSurface.tif",format = "GTiff")

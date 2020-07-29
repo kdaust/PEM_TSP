@@ -1,14 +1,14 @@
 ##Kiri Daust, July 2020
 
-library(clhs)
-library(sf)
-library(raster)
-library(sp)
-library(gdistance)
-library(foreach)
-library(data.table)
-library(fasterize)
-library(reticulate)
+      library(clhs)
+      library(sf)
+      library(raster)
+      library(sp)
+      library(gdistance)
+      library(foreach)
+      library(data.table)
+      library(fasterize)
+      library(reticulate)
 
 load("BoundaryLayers.Rdata")
 s <- sampleRegular(ancDat, size = 1000000, sp = TRUE) # sample raster
