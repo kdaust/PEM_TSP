@@ -1,5 +1,5 @@
 ###Heli point sample plan
-## Kiri Daust, July 2020
+## Kiri Daust, July 2020  
 library(clhs)
 library(sf)
 library(raster)
