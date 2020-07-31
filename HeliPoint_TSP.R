@@ -11,11 +11,13 @@ library(fasterize)
 library(reticulate)
 library(here)
 
-datLoc <- here("InputData")
+datLoc <- here("InputData") 
+### landscape levels covariates
 covars <- paste(datLoc, c("25m_DAH_3Class.tif","25m_LandformClass_Default_Seive4.tif",
                           "25m_MRVBF_Classified_IS64Low6Up2.tif","dem.tif"), sep = "/")
 ancDat <- raster::stack(covars)
 
+##in this case we're only using walkFast
 rd1 <- 0.0003125
 rd2 <- 0.000625
 track <- 0.00125
@@ -30,6 +32,7 @@ slope <- raster(list.files(datLoc, full.name = TRUE)[slope_raster])
 # read in already sampled locations
 included <- st_read(paste0(datLoc,"/ESSF_samples.gpkg"))
 
+## clip to just ESSF
 boundary <- st_read(paste0(datLoc,"/bec_edited.gpkg"))
 boundary <- boundary[,"MAP_LABEL"]
 boundary <- boundary[grep("ESSF",boundary$MAP_LABEL),]
@@ -38,6 +41,7 @@ b2 <- fasterize(boundary, slope)
 slope <- mask(slope, b2)
 ancDat <- mask(ancDat,b2)
 
+##read in drop points
 heliDrop <- st_read(paste0(datLoc,"/Deception_Heli_Samples.gpkg"))
 heliDrop <- heliDrop[,"name"]
 heliDrop <- st_transform(heliDrop, 3005)
@@ -51,50 +55,29 @@ names(cost) <- "cost"
 
 tr <- transition(cost, transitionFunction = function(x) 1/mean(x), directions = 8) 
 
-## sliced
-getSample <- function(index){
-  acost <- accCost(tr, start[index,])
-  
-  tempBuff <- st_buffer(heliDrop[index,],dist = 4000)
-  tempBuffR <- fasterize(tempBuff, acost)
-  acost <- mask(acost, tempBuffR, updatevalue = 10000)
-  lays <- stack(ancDat,acost)
-  names(lays) <- c("DAH","LFC","MRVBF","DEM","cost")
-  
-  s <- sampleRegular(lays , size = 500000, sp = TRUE) # sample raster
-  s <- s[!is.na(s$DAH) & !is.infinite(s$cost),]
-  return(s)
-}
-
-s <- getSample(2)
-spoints <- clhs(s,size = 5, cost = "cost", iter = 5000, simple = F,progress = T)
-for(site in 2:10) {
-  prevSampled <- spoints$sampled_data
-  s <- getSample(site)
-  s <- rbind(prevSampled,s)
-  spoints <- clhs(s,size = length(prevSampled)+5,include = 1:length(prevSampled), 
-                  cost = "cost", iter = 5000, simple = F,progress = T)
-}
-
-### unsliced
+### unsliced (cost layer includes all drop points)
 acost <- accCost(tr, start)
 lays <- stack(ancDat,acost)
 names(lays) <- c("DAH","LFC","MRVBF","DEM","cost")
 
 s <- sampleRegular(lays , size = 500000, sp = TRUE) # sample raster
 s <- s[!is.na(s$DAH) & !is.infinite(s$cost),]
+## have to add already sampled points to data
 included <- st_transform(included, st_crs(s))
 incPnts <- raster::extract(lays, included, sp = T)
 incPnts <- incPnts[,-(1:3)]
 s <- rbind(incPnts, s)
 
-spoints <- clhs(s,size = length(incPnts)+25,include = 1:length(incPnts), 
+### get sample locations
+spoints <- clhs(s,size = length(incPnts)+50,include = 1:length(incPnts), 
                 cost = "cost", iter = 5000, simple = F,progress = T)
+############################################################################
 
 pnts <- spoints$sampled_data
-pnts <- pnts[-((length(pnts)-length(incPnts)+1):length(pnts)),]
+pnts <- pnts[-((length(pnts)-length(incPnts)+1):length(pnts)),] ##remove previously sampled points
 plot(acost)
 plot(pnts, add = T)
+
 p2 <- st_as_sf(pnts)
 heliDrop <- st_zm(heliDrop)
 heliDrop <- st_transform(heliDrop, st_crs(pnts))
@@ -104,20 +87,29 @@ colnames(pnts@data) <- "name"
 pnts <- rbind(pnts, dropPnts)
 pnts2 <- st_as_sf(pnts)
 
+## create distance matrix between sample points
 test <- costDistance(tr,pnts,pnts)
 dMat2 <- as.matrix(test)
 dMat2 <- dMat2*60
 dMat2[is.infinite(dMat2)] <- 1000
 
 source_python("./mTSP.py")
-vrp <- py_mTSP(dat = dMat2,num_days = 20L, start = c(50:59,50:59), 
-               end = c(50:59,50:59), max_cost = 8L*60L, plot_time = 45L,penalty = 500L)
+maxTime <- 8L ##hours
+plotTime <- 45L ##mins
+## note that indexing in python starts at 0, not 1
+## to not allow dropped sites, set penalty > 10000
 
-vrp <- py_mTSP(dat = dMat2,num_days = 10L, start = 25:34, end = 25:34, 
-               max_cost = 5L*60L, plot_time = 45L, penalty = 5L*60L)
+## this one for two routes at each drop
+vrp <- py_mTSP(dat = dMat2,num_days = 20L, start = c(50:59,50:59), 
+               end = c(50:59,50:59), max_cost = maxTime*60L, plot_time = plotTime,penalty =  maxTime*60L+5L)
+
+## one route at each drop
+vrp <- py_mTSP(dat = dMat2,num_days = 10L, start = 50:59, end = 50:59, 
+               max_cost = maxTime*60L, plot_time = plotTime, penalty =  maxTime*60L+5L)
 
 result <- vrp[[1]]
 
+## create spatial paths
 paths <- foreach(j = 0:(length(result)-1), .combine = rbind) %do% {
   if(length(result[[as.character(j)]]) > 2){
     cat("Drop site",j,"...\n")
@@ -138,6 +130,7 @@ paths <- foreach(j = 0:(length(result)-1), .combine = rbind) %do% {
 
 st_write(paths, dsn = "Heli_Included_ShortDay.gpkg", layer = "Paths", append = T, driver = "GPKG")  
 
+## label points
 p2$PID <- seq_along(p2$DAH)
 p2 <- p2[,"PID"]
 p2$DropLoc <- NA
@@ -150,3 +143,30 @@ for(i in 0:(length(result)-1)){
 }
 st_write(p2, dsn = "Heli_Included_ShortDay.gpkg",layer = "Points", append = T,overwrite = T, driver = "GPKG")
 writeRaster(acost, "CostSurface.tif",format = "GTiff")
+#################################################################
+
+## sliced clhs
+getSample <- function(index){
+  acost <- accCost(tr, start[index,])
+  
+  tempBuff <- st_buffer(heliDrop[index,],dist = 4000)
+  tempBuffR <- fasterize(tempBuff, acost)
+  acost <- mask(acost, tempBuffR, updatevalue = 10000)
+  lays <- stack(ancDat,acost)
+  names(lays) <- c("DAH","LFC","MRVBF","DEM","cost")
+  
+  s <- sampleRegular(lays , size = 500000, sp = TRUE) # sample raster
+  s <- s[!is.na(s$DAH) & !is.infinite(s$cost),]
+  return(s)
+}
+
+s <- getSample(1)
+spoints <- clhs(s,size = 5, cost = "cost", iter = 5000, simple = F,progress = T)
+for(site in 2:10) {
+  prevSampled <- spoints$sampled_data
+  s <- getSample(site)
+  s <- rbind(prevSampled,s)
+  spoints <- clhs(s,size = length(prevSampled)+5,include = 1:length(prevSampled), 
+                  cost = "cost", iter = 5000, simple = F,progress = T)
+}
+##now go to line 74
