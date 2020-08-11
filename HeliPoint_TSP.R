@@ -62,15 +62,17 @@ names(lays) <- c("DAH","LFC","MRVBF","DEM","cost")
 
 s <- sampleRegular(lays , size = 500000, sp = TRUE) # sample raster
 s <- s[!is.na(s$DAH) & !is.infinite(s$cost),]
+s2 <- st_as_sf(s)
 ## have to add already sampled points to data
 included <- st_transform(included, st_crs(s))
 incPnts <- raster::extract(lays, included, sp = T)
 incPnts <- incPnts[,-(1:3)]
-s <- rbind(incPnts, s)
+incPnts <- st_as_sf(incPnts)
+s <- rbind(incPnts, s2)
 
 ### get sample locations
-spoints <- clhs(s,size = length(incPnts)+50,include = 1:length(incPnts), 
-                cost = "cost", iter = 5000, simple = F,progress = T)
+spoints <- clhs_dist(s,size = nrow(incPnts)+50, minDist = 260, include = 1:length(incPnts), 
+                  cost = "cost", iter = 5000, simple = F,progress = T)
 ############################################################################
 
 pnts <- spoints$sampled_data
