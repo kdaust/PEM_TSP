@@ -11,6 +11,9 @@ library(fasterize)
 library(reticulate)
 library(here)
 
+Rcpp::sourceCpp("CppCLHS.cpp")
+source("FastCLHS_R.R")
+
 datLoc <- here("InputData") 
 ### landscape levels covariates
 covars <- paste(datLoc, c("25m_DAH_3Class.tif","25m_LandformClass_Default_Seive4.tif",
@@ -32,14 +35,17 @@ proj4string(slope) <- "+init=epsg:3005"
 # read in already sampled locations
 included <- st_read(paste0(datLoc,"/ESSF_samples.gpkg"))
 
+##read in buffer
+buff <- st_read("InputData/ESSF_Buffer.gpkg")
+
 ## clip to just ESSF
-boundary <- st_read(paste0(datLoc,"/bec_edited.gpkg"))
-boundary <- boundary[,"MAP_LABEL"]
-boundary <- boundary[grep("ESSF",boundary$MAP_LABEL),]
-b2 <- st_union(boundary)
-b2 <- fasterize(boundary, slope)
-slope <- mask(slope, b2)
-ancDat <- mask(ancDat,b2)
+# boundary <- st_read(paste0(datLoc,"/bec_edited.gpkg"))
+# boundary <- boundary[,"MAP_LABEL"]
+# boundary <- boundary[grep("ESSF",boundary$MAP_LABEL),]
+# b2 <- st_union(boundary)
+# b2 <- fasterize(boundary, slope)
+buff <- fasterize(buff, slope)
+ancDat <- mask(ancDat,buff)
 
 ##read in drop points
 heliDrop <- st_read(paste0(datLoc,"/Deception_Heli_Samples.gpkg"))
@@ -62,33 +68,40 @@ names(lays) <- c("DAH","LFC","MRVBF","DEM","cost")
 
 s <- sampleRegular(lays , size = 500000, sp = TRUE) # sample raster
 s <- s[!is.na(s$DAH) & !is.infinite(s$cost),]
+s2 <- st_as_sf(s)
 ## have to add already sampled points to data
 included <- st_transform(included, st_crs(s))
 incPnts <- raster::extract(lays, included, sp = T)
 incPnts <- incPnts[,-(1:3)]
-s <- rbind(incPnts, s)
+incPnts <- st_as_sf(incPnts)
+s <- rbind(incPnts, s2)
 
 ### get sample locations
-spoints <- clhs(s,size = length(incPnts)+50,include = 1:length(incPnts), 
-                cost = "cost", iter = 5000, simple = F,progress = T)
+spoints <- clhs_dist(s,size = 50+nrow(incPnts), minDist = 260, maxCost = 2, include = 1:nrow(incPnts), 
+                  cost = "cost", iter = 5000, simple = F,progress = T)
 ############################################################################
 
 pnts <- spoints$sampled_data
-pnts <- pnts[-((length(pnts)-length(incPnts)+1):length(pnts)),] ##remove previously sampled points
+
 plot(acost)
 plot(pnts, add = T)
+
+
+ac2 <- acost
+ac2[ac2 > 2.5] <- 20
+plot(ac2)
 
 p2 <- st_as_sf(pnts)
 heliDrop <- st_zm(heliDrop)
 heliDrop <- st_transform(heliDrop, st_crs(pnts))
-dropPnts <- as(heliDrop,"Spatial")
 pnts <- pnts[,"DAH"]
-colnames(pnts@data) <- "name"
-pnts <- rbind(pnts, dropPnts)
-pnts2 <- st_as_sf(pnts)
+colnames(pnts) <- c("name","geom")
+st_geometry(pnts) <- "geom"
+pnts <- rbind(pnts, heliDrop)
+pnts2 <- as(pnts, "Spatial")
 
 ## create distance matrix between sample points
-test <- costDistance(tr,pnts,pnts)
+test <- costDistance(tr,pnts2,pnts2)
 dMat2 <- as.matrix(test)
 dMat2 <- dMat2*60
 dMat2[is.infinite(dMat2)] <- 1000
@@ -99,13 +112,23 @@ plotTime <- 60L ##mins
 ## note that indexing in python starts at 0, not 1
 ## to not allow dropped sites, set penalty > 10000
 
+##penalty
+objVals <- spoints[["final_obj"]][1:50]
+objVals <- objVals - max(objVals)
+minPen <- (maxTime*60L)/2L
+maxPen <- (maxTime*60L)*2L
+objVals <- scales::rescale(objVals, to = c(minPen,maxPen))
+objVals <- as.integer(objVals)
+
 ## this one for two routes at each drop
 # vrp <- py_mTSP(dat = dMat2,num_days = 20L, start = c(50:59,50:59), 
 #                end = c(50:59,50:59), max_cost = maxTime*60L, plot_time = plotTime,penalty =  maxTime*60L+5L)
 
 ## one route at each drop
+# dMat2[51:60,] <- 0
+# dMat2[,51:60] <- 0
 vrp <- py_mTSP(dat = dMat2,num_days = 10L, start = 50:59, end = 50:59, 
-               max_cost = maxTime*60L, plot_time = plotTime, penalty =  maxTime*60L+5L)
+               max_cost = maxTime*60L, plot_time = plotTime, penalty =  objVals, arbDepot = F)
 
 result <- vrp[[1]]
 
@@ -115,8 +138,8 @@ paths <- foreach(j = 0:(length(result)-1), .combine = rbind) %do% {
     cat("Drop site",j,"...\n")
     p1 <- result[[as.character(j)]]+1
     out <- foreach(i = 1:(length(p1)-1), .combine = rbind) %do% {
-      temp1 <- pnts2[p1[i],]
-      temp2 <- pnts2[p1[i+1],]
+      temp1 <- pnts[p1[i],]
+      temp2 <- pnts[p1[i+1],]
       temp3 <- shortestPath(tr,st_coordinates(temp1),
                             st_coordinates(temp2),output = "SpatialLines") %>% st_as_sf()
       temp3$Segment = i
@@ -127,8 +150,11 @@ paths <- foreach(j = 0:(length(result)-1), .combine = rbind) %do% {
   }
   
 }
+filename <- "Heli_ObjPenalty.gpkg"
 
-st_write(paths, dsn = "Heli_NewTests.gpkg", layer = "Paths", append = F, driver = "GPKG")  
+
+st_write(paths, dsn = filename, layer = "Paths", append = T, driver = "GPKG")  
+
 
 ## label points
 p2$PID <- seq_along(p2$DAH)
@@ -141,8 +167,11 @@ for(i in 0:(length(result)-1)){
   p2$DropLoc[p1] <- i
   p2$Order[p1] <- 1:(length(p1))
 }
-st_write(p2, dsn = "Heli_NewTests.gpkg",layer = "Points", append = T,overwrite = T, driver = "GPKG")
-writeRaster(acost, "CostSurface.tif",format = "GTiff", overwrite = TRUE)
+
+st_write(p2, dsn = filename,layer = "Points", append = T,overwrite = T, driver = "GPKG")
+temp <- mask(acost, buff)
+writeRaster(temp, "CostSurface.tif",format = "GTiff")
+
 #################################################################
 
 ## sliced clhs
