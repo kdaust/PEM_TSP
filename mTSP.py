@@ -43,7 +43,7 @@ def py_mTSP(dat, num_days, start, end, max_cost,plot_time,penalty):
     dimension_name = 'Distance'
     routing.AddDimension(
         transit_callback_index,
-        0,  # no slack
+        1000,  # no slack
         max_cost,  # vehicle maximum travel distance
         True,  # start cumul to zero
         dimension_name)

@@ -14,9 +14,9 @@ library(here)
 datLoc <- here("InputData") 
 ### landscape levels covariates
 covars <- paste(datLoc, c("25m_DAH_3Class.tif","25m_LandformClass_Default_Seive4.tif",
-                          "25m_MRVBF_Classified_IS64Low6Up2.tif","dem.tif"), sep = "/")
+                          "25m_MRVBF_Classified_IS64Low6Up2.tif","DEM_25m.tif"), sep = "/")
 ancDat <- raster::stack(covars)
-
+proj4string(ancDat) <- "+init=epsg:3005"
 ##in this case we're only using walkFast
 rd1 <- 0.0003125
 rd2 <- 0.000625
@@ -28,7 +28,7 @@ slopeAdjust <- function(slope){1+((slope-25)*0.02)}
 # read in slope data
 slope_raster <-  grep("^slope", list.files(datLoc))
 slope <- raster(list.files(datLoc, full.name = TRUE)[slope_raster])
-
+proj4string(slope) <- "+init=epsg:3005"
 # read in already sampled locations
 included <- st_read(paste0(datLoc,"/ESSF_samples.gpkg"))
 
@@ -95,13 +95,13 @@ dMat2[is.infinite(dMat2)] <- 1000
 
 source_python("./mTSP.py")
 maxTime <- 8L ##hours
-plotTime <- 45L ##mins
+plotTime <- 60L ##mins
 ## note that indexing in python starts at 0, not 1
 ## to not allow dropped sites, set penalty > 10000
 
 ## this one for two routes at each drop
-vrp <- py_mTSP(dat = dMat2,num_days = 20L, start = c(50:59,50:59), 
-               end = c(50:59,50:59), max_cost = maxTime*60L, plot_time = plotTime,penalty =  maxTime*60L+5L)
+# vrp <- py_mTSP(dat = dMat2,num_days = 20L, start = c(50:59,50:59), 
+#                end = c(50:59,50:59), max_cost = maxTime*60L, plot_time = plotTime,penalty =  maxTime*60L+5L)
 
 ## one route at each drop
 vrp <- py_mTSP(dat = dMat2,num_days = 10L, start = 50:59, end = 50:59, 
@@ -128,7 +128,7 @@ paths <- foreach(j = 0:(length(result)-1), .combine = rbind) %do% {
   
 }
 
-st_write(paths, dsn = "Heli_Included_ShortDay.gpkg", layer = "Paths", append = T, driver = "GPKG")  
+st_write(paths, dsn = "Heli_NewTests.gpkg", layer = "Paths", append = F, driver = "GPKG")  
 
 ## label points
 p2$PID <- seq_along(p2$DAH)
@@ -141,8 +141,8 @@ for(i in 0:(length(result)-1)){
   p2$DropLoc[p1] <- i
   p2$Order[p1] <- 1:(length(p1))
 }
-st_write(p2, dsn = "Heli_Included_ShortDay.gpkg",layer = "Points", append = T,overwrite = T, driver = "GPKG")
-writeRaster(acost, "CostSurface.tif",format = "GTiff")
+st_write(p2, dsn = "Heli_NewTests.gpkg",layer = "Points", append = T,overwrite = T, driver = "GPKG")
+writeRaster(acost, "CostSurface.tif",format = "GTiff", overwrite = TRUE)
 #################################################################
 
 ## sliced clhs
