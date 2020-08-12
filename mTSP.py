@@ -9,10 +9,16 @@ Created on Fri Jun 26 13:01:30 2020
 
 from ortools.constraint_solver import routing_enums_pb2
 from ortools.constraint_solver import pywrapcp
+import numpy as np
 
-def py_mTSP(dat, num_days, start, end, max_cost,plot_time,penalty):
+def py_mTSP(dat, num_days, start, end, max_cost, plot_time, penalty, arbDepot):
+    dat2 = dat.copy()
+    # if(arbDepot):
+    #     temp = start.append(max(start)+1)
+    #     dat2[temp,] = 0
+    #     dat2[:,temp] = 0
     data = {}
-    data['distance_matrix'] = dat
+    data['distance_matrix'] = dat2
     data['num_vehicles'] = num_days
     data['starts'] = start
     data['ends'] = end
@@ -77,6 +83,8 @@ def py_mTSP(dat, num_days, start, end, max_cost,plot_time,penalty):
             rd += routing.GetArcCostForVehicle(
                 previous_index, index, vehicle_id)
         temp.append(manager.IndexToNode(index))
+        if(arbDepot):
+            temp = temp[1:-1]
         plan_output[vehicle_id] = temp
         dist_output[vehicle_id] = rd
     

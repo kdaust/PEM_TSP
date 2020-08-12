@@ -1,4 +1,4 @@
-# df <- data.frame(
+  # df <- data.frame(
 #   a = runif(1000000),
 #   b = rnorm(1000000),
 #   c = rexp(1000000)*4,
@@ -11,7 +11,7 @@
 
 #library(Rcpp)
 ##Rcpp::sourceCpp('./_functions/CppCLHS.cpp')
-
+  
 lhs_obj <- function(
   data_continuous_sampled,
   continuous_strata,
@@ -283,7 +283,8 @@ clhs_fast <- function(
 clhs_dist <- function(
   x, # sf object
   size, # Number of samples you want
-  minDist,
+  minDist,## minimum distance between points
+  maxCost = Inf,
   include = NULL, # row index of data that must be in the final sample
   cost = NULL, # Number or name of the attribute used as a cost
   iter = 1000, # Number of max iterations
@@ -333,13 +334,14 @@ clhs_dist <- function(
     if (!length(i_cost)) stop("Could not find the cost attribute.") 
     
     # Get cost attribute column 
-    cost <- x[ , i_cost, drop = FALSE] %>% st_drop_geometry()
+    cost <- x[ , i_cost] %>% st_drop_geometry()
+    cost <- cost[,1]
     # Remove cost attribute from attribute table
     x <- x[, -1*i_cost, drop = FALSE]
     
     # Si include, cost is 0
     if (!is.null(include)) {
-      cost[include, ] <- 0
+      cost[include] <- 0
     }
     
     # Flags
@@ -355,9 +357,12 @@ clhs_dist <- function(
   }
   
   data_continuous <- as.matrix(st_drop_geometry(x))
+  xnew <- x[-include,]
+  xnew <- xnew[cost[-include] < maxCost,]
+  data_lowcost <- as.matrix(st_drop_geometry(xnew))
   
   metropolis <- exp(-1*0/temp) # Initial Metropolis value
-  n_data <- nrow(data_continuous) # Number of individuals in the data set
+  n_data <- nrow(data_lowcost) # Number of individuals in the data set
   
   # Edge of the strata
   continuous_strata <- apply(
@@ -373,12 +378,12 @@ clhs_dist <- function(
   
   # Mandatory data in the sample
   sampled_size <- size - length(include)
-  not_included <- setdiff(1:n_data, include) ##slow
+  not_included <- 1:n_data 
   
   # initialise, pick randomly
   n_remainings <- n_data - size # number of individuals remaining unsampled
   i_sampled <- sample(not_included, size = sampled_size,replace = F)
-  dmat <- st_distance(x[i_sampled,]) %>% units::drop_units()
+  dmat <- st_distance(xnew[i_sampled,]) %>% units::drop_units()
   dmat[upper.tri(dmat, diag = T)] <- Inf
   i_close <- which(dmat < minDist, arr.ind = T)
   while(length(i_close) > 0){
@@ -392,9 +397,9 @@ clhs_dist <- function(
   }
   
                         
-  i_sampled <- c(i_sampled, include) # individuals randomly chosen
+  i_sampled_all <- c(i_sampled, include) # individuals randomly chosen
   i_unsampled <- setdiff(1:n_data, i_sampled) # individuals remaining unsampled
-  data_continuous_sampled <- data_continuous[i_sampled, , drop = FALSE] # sampled continuous data
+  data_continuous_sampled <- data_continuous[i_sampled_all, , drop = FALSE] # sampled continuous data
   data_continuous_sampled <- data_continuous_sampled[complete.cases(data_continuous_sampled),]
   
   res <- lhs_obj(data_continuous_sampled,continuous_strata, cor_mat)
@@ -404,7 +409,7 @@ clhs_dist <- function(
   
   if (cost_mode) {
     # (initial) operational cost
-    op_cost <- sum(cost[i_sampled, ])
+    op_cost <- sum(cost[i_sampled_all])
     # vector storing operational costs
     op_cost_values <- vector(mode = 'numeric', length = iter)
   } else op_cost_values <- NULL
@@ -431,44 +436,46 @@ clhs_dist <- function(
     
     if (runif(1) < 0.5) {
       # pick a random sampled point and random unsampled point and swap them
-      idx_removed <- sample(1:length(setdiff(i_sampled, include)), size = 1, replace = FALSE)
-      spl_removed <- setdiff(i_sampled, include)[idx_removed]
+      idx_removed <- sample(1:length(i_sampled), size = 1, replace = FALSE)
+      spl_removed <- i_sampled[idx_removed]
       idx_added <- sample(1:length(i_unsampled), size = 1, replace = FALSE)
-      i_sampled <- setdiff(i_sampled, include)[-idx_removed]
+      i_sampled <- i_sampled[-idx_removed]
       newDist <- st_distance(x[i_sampled,], x[idx_added,]) %>% units::drop_units()
       while(any(newDist < minDist)){
         idx_added <- sample(1:length(i_unsampled), size = 1, replace = FALSE)
         newDist <- st_distance(x[i_sampled,], x[idx_added,]) %>% units::drop_units()
       }
-      i_sampled <- c(i_sampled, i_unsampled[idx_added], include)
+      i_sampled <- c(i_sampled, i_unsampled[idx_added])
+      i_sampled_all <- c(i_sampled,include)
       i_unsampled <- i_unsampled[-idx_added]
       i_unsampled <- c(i_unsampled, spl_removed)
       
       # creating new data sampled
-      data_continuous_sampled <- data_continuous[i_sampled, , drop = FALSE]
+      data_continuous_sampled <- data_continuous[i_sampled_all, , drop = FALSE]
     }else{
       # remove the worse sampled & resample
-      worse <- max(delta_obj_continuous[!i_sampled %in% include])
-      i_worse <- which(delta_obj_continuous[!i_sampled %in% include] == worse)
+      worse <- max(delta_obj_continuous[!i_sampled_all %in% include])
+      i_worse <- which(delta_obj_continuous[!i_sampled_all %in% include] == worse)
       # If there's more than one worse candidate, we pick one at random
       if (length(i_worse) > 1) i_worse <- sample(i_worse, size = 1)
       
       # swap with reservoir
-      spl_removed <- setdiff(i_sampled, include)[i_worse] # will be removed from the sampled set. 
+      spl_removed <- i_sampled[i_worse] # will be removed from the sampled set. 
       idx_added <- sample(1:n_remainings, size = 1, replace = FALSE) # new candidate that will take their place
-      i_sampled <- setdiff(i_sampled, include)[-i_worse]
+      i_sampled <- i_sampled[-i_worse]
       newDist <- st_distance(x[i_sampled,], x[idx_added,]) %>% units::drop_units()
       while(any(newDist < minDist)){
         idx_added <- sample(1:length(i_unsampled), size = 1, replace = FALSE)
         newDist <- st_distance(x[i_sampled,], x[idx_added,]) %>% units::drop_units()
       }
       
-      i_sampled <- c(i_sampled, i_unsampled[idx_added], include)
+      i_sampled <- c(i_sampled, i_unsampled[idx_added])
+      i_sampled_all <- c(i_sampled,include)
       i_unsampled <- i_unsampled[-idx_added]
       i_unsampled <- c(i_unsampled, spl_removed)
       
       # creating new data sampled
-      data_continuous_sampled <- data_continuous[i_sampled, , drop = FALSE]
+      data_continuous_sampled <- data_continuous[i_sampled_all, , drop = FALSE]
     }
     
     # calc obj
@@ -482,7 +489,7 @@ clhs_dist <- function(
     
     if (cost_mode) {
       # op costs
-      op_cost <- sum(cost[i_sampled, ])
+      op_cost <- sum(cost[i_sampled_all])
       delta_cost <- op_cost - previous$op_cost
       if (track_mode) metropolis_cost <- Inf # runif(1) >= Inf is always FALSE
       else metropolis_cost <- exp(-1*delta_cost/temp)
@@ -509,7 +516,8 @@ clhs_dist <- function(
     if (delta_obj > 0 & runif(1) >= metropolis | runif(1) >= metropolis_cost) {
       i_sampled <- previous$i_sampled
       i_unsampled <- previous$i_unsampled
-      data_continuous_sampled <- data_continuous[i_sampled, , drop = FALSE]
+      i_sampled_all <- c(i_sampled, include)
+      data_continuous_sampled <- data_continuous[i_sampled_all, , drop = FALSE]
       
       obj <- previous$obj
       delta_obj_continuous <- previous$delta_obj_continuous
@@ -532,7 +540,7 @@ clhs_dist <- function(
   # Close progress bar
   if (progress) close(pb)
   
-  sampled_data <- x[i_sampled,]
+  sampled_data <- xnew[i_sampled,]
   
   # Simple output - just the sampled object
   if (simple) res <- i_sampled
