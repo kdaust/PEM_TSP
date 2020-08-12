@@ -391,7 +391,7 @@ clhs_dist <- function(
     i_sampled <- i_sampled[-i_close[,2]]
     newSamp <- sample(tempDat, size = length(unique(i_close[,2])), replace = F)
     i_sampled <- c(i_sampled,newSamp)
-    dmat <- st_distance(x[i_sampled,]) %>% units::drop_units()
+    dmat <- st_distance(xnew[i_sampled,]) %>% units::drop_units()
     dmat[upper.tri(dmat, diag = T)] <- Inf
     i_close <- which(dmat < minDist, arr.ind = T)
   }
@@ -439,13 +439,15 @@ clhs_dist <- function(
       idx_removed <- sample(1:length(i_sampled), size = 1, replace = FALSE)
       spl_removed <- i_sampled[idx_removed]
       idx_added <- sample(1:length(i_unsampled), size = 1, replace = FALSE)
+      spl_added <- i_unsampled[idx_added]
       i_sampled <- i_sampled[-idx_removed]
-      newDist <- st_distance(x[i_sampled,], x[idx_added,]) %>% units::drop_units()
+      newDist <- st_distance(xnew[i_sampled,], xnew[spl_added,]) %>% units::drop_units()
       while(any(newDist < minDist)){
         idx_added <- sample(1:length(i_unsampled), size = 1, replace = FALSE)
-        newDist <- st_distance(x[i_sampled,], x[idx_added,]) %>% units::drop_units()
+        spl_added <- i_unsampled[idx_added]
+        newDist <- st_distance(xnew[i_sampled,], xnew[spl_added,]) %>% units::drop_units()
       }
-      i_sampled <- c(i_sampled, i_unsampled[idx_added])
+      i_sampled <- c(i_sampled, spl_added)
       i_sampled_all <- c(i_sampled,include)
       i_unsampled <- i_unsampled[-idx_added]
       i_unsampled <- c(i_unsampled, spl_removed)
@@ -461,15 +463,17 @@ clhs_dist <- function(
       
       # swap with reservoir
       spl_removed <- i_sampled[i_worse] # will be removed from the sampled set. 
-      idx_added <- sample(1:n_remainings, size = 1, replace = FALSE) # new candidate that will take their place
+      idx_added <- sample(1:length(i_unsampled), size = 1, replace = FALSE) # new candidate that will take their place
+      spl_added <- i_unsampled[idx_added]
       i_sampled <- i_sampled[-i_worse]
-      newDist <- st_distance(x[i_sampled,], x[idx_added,]) %>% units::drop_units()
+      newDist <- st_distance(xnew[i_sampled,], xnew[spl_added,]) %>% units::drop_units()
       while(any(newDist < minDist)){
         idx_added <- sample(1:length(i_unsampled), size = 1, replace = FALSE)
-        newDist <- st_distance(x[i_sampled,], x[idx_added,]) %>% units::drop_units()
+        spl_added <- i_unsampled[idx_added]
+        newDist <- st_distance(xnew[i_sampled,], xnew[spl_added,]) %>% units::drop_units()
       }
       
-      i_sampled <- c(i_sampled, i_unsampled[idx_added])
+      i_sampled <- c(i_sampled, spl_added)
       i_sampled_all <- c(i_sampled,include)
       i_unsampled <- i_unsampled[-idx_added]
       i_unsampled <- c(i_unsampled, spl_removed)
