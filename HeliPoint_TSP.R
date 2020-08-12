@@ -36,7 +36,7 @@ slope <- raster(list.files(datLoc, full.name = TRUE)[slope_raster])
 included <- st_read(paste0(datLoc,"/ESSF_samples.gpkg"))
 
 ##read in buffer
-buff <- st_read("ESSF_Buffer.gpkg")
+buff <- st_read("InputData/ESSF_Buffer.gpkg")
 
 ## clip to just ESSF
 # boundary <- st_read(paste0(datLoc,"/bec_edited.gpkg"))
@@ -77,11 +77,12 @@ incPnts <- st_as_sf(incPnts)
 s <- rbind(incPnts, s2)
 
 ### get sample locations
-spoints <- clhs_dist(s,size = 50+nrow(incPnts), minDist = 260, maxCost = 2.5, include = 1:nrow(incPnts), 
+spoints <- clhs_dist(s,size = 50+nrow(incPnts), minDist = 260, maxCost = 2, include = 1:nrow(incPnts), 
                   cost = "cost", iter = 5000, simple = F,progress = T)
 ############################################################################
 
 pnts <- spoints$sampled_data
+
 plot(acost)
 plot(pnts, add = T)
 
@@ -111,15 +112,23 @@ plotTime <- 45L ##mins
 ## note that indexing in python starts at 0, not 1
 ## to not allow dropped sites, set penalty > 10000
 
+##penalty
+objVals <- spoints[["final_obj"]][1:50]
+objVals <- objVals - max(objVals)
+minPen <- (maxTime*60L)/2L
+maxPen <- (maxTime*60L)*2L
+objVals <- scales::rescale(objVals, to = c(minPen,maxPen))
+objVals <- as.integer(objVals)
+
 ## this one for two routes at each drop
 vrp <- py_mTSP(dat = dMat2,num_days = 20L, start = c(50:59,50:59), 
                end = c(50:59,50:59), max_cost = maxTime*60L, plot_time = plotTime,penalty =  maxTime*60L+5L)
 
 ## one route at each drop
-dMat2[51:60,] <- 0
-dMat2[,51:60] <- 0
+# dMat2[51:60,] <- 0
+# dMat2[,51:60] <- 0
 vrp <- py_mTSP(dat = dMat2,num_days = 10L, start = 50:59, end = 50:59, 
-               max_cost = maxTime*60L, plot_time = plotTime, penalty =  maxTime*60L+5L, arbDepot = F)
+               max_cost = maxTime*60L, plot_time = plotTime, penalty =  objVals, arbDepot = F)
 
 result <- vrp[[1]]
 
@@ -141,7 +150,7 @@ paths <- foreach(j = 0:(length(result)-1), .combine = rbind) %do% {
   }
   
 }
-filename <- "Heli_NewCLHS.gpkg"
+filename <- "Heli_ObjPenalty.gpkg"
 
 st_write(paths, dsn = filename, layer = "Paths", append = T, driver = "GPKG")  
 
@@ -157,7 +166,7 @@ for(i in 0:(length(result)-1)){
   p2$Order[p1] <- 1:(length(p1))
 }
 st_write(p2, dsn = filename,layer = "Points", append = T,overwrite = T, driver = "GPKG")
-  temp <- mask(acost, buff)
+temp <- mask(acost, buff)
 writeRaster(temp, "CostSurface.tif",format = "GTiff")
 #################################################################
 

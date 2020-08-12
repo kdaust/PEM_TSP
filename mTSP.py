@@ -55,8 +55,8 @@ def py_mTSP(dat, num_days, start, end, max_cost, plot_time, penalty, arbDepot):
         dimension_name)
         
     # Allow to drop nodes.
-    for node in range(1, len(data['distance_matrix'])):
-        routing.AddDisjunction([manager.NodeToIndex(node)], penalty)
+    for node in range(len(penalty)):
+        routing.AddDisjunction([manager.NodeToIndex(node)], penalty[node])
 
     distance_dimension = routing.GetDimensionOrDie(dimension_name)
     distance_dimension.SetGlobalSpanCostCoefficient(2)
