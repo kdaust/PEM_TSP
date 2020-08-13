@@ -17,9 +17,9 @@ source("FastCLHS_R.R")
 datLoc <- here("InputData") 
 ### landscape levels covariates
 covars <- paste(datLoc, c("25m_DAH_3Class.tif","25m_LandformClass_Default_Seive4.tif",
-                          "25m_MRVBF_Classified_IS64Low6Up2.tif","dem.tif"), sep = "/")
+                          "25m_MRVBF_Classified_IS64Low6Up2.tif","DEM_25m.tif"), sep = "/")
 ancDat <- raster::stack(covars)
-
+proj4string(ancDat) <- "+init=epsg:3005"
 ##in this case we're only using walkFast
 rd1 <- 0.0003125
 rd2 <- 0.000625
@@ -31,6 +31,10 @@ slopeAdjust <- function(slope){1+((slope-25)*0.02)}
 # read in slope data
 slope_raster <-  grep("^slope", list.files(datLoc))
 slope <- raster(list.files(datLoc, full.name = TRUE)[slope_raster])
+
+proj4string(slope) <- "+init=epsg:3005"
+# read in already sampled locations
+included <- st_read(paste0(datLoc,"/ESSF_samples.gpkg"))
 
 ##read in buffer
 buff <- st_read("InputData/ESSF_Buffer.gpkg")
@@ -213,7 +217,6 @@ writeLayout <- function(id,filename){
   return(TRUE)
 }
 
-
 # ## this one for two routes at each drop
 # vrp <- py_mTSP(dat = dMat2,num_days = 20L, start = c(50:59,50:59), 
 #                end = c(50:59,50:59), max_cost = maxTime*60L, plot_time = plotTime,penalty =  maxTime*60L+5L)
@@ -222,6 +225,7 @@ writeLayout <- function(id,filename){
 
 temp <- mask(acost, buff)
 writeRaster(temp, "CostSurface.tif",format = "GTiff")
+
 #################################################################
 
 ## sliced clhs
