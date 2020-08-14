@@ -15,9 +15,10 @@ Rcpp::sourceCpp("CppCLHS.cpp")
 source("FastCLHS_R.R")
 
 datLoc <- here("InputData") 
+covLoc <- here("Covariates")
 ### landscape levels covariates
-covars <- paste(datLoc, c("25m_DAH_3Class.tif","25m_LandformClass_Default_Seive4.tif",
-                          "25m_MRVBF_Classified_IS64Low6Up2.tif","DEM_25m.tif"), sep = "/")
+covars <- paste(covLoc, c("25m_DAH_3Class.tif","25m_LandformClass_Default_Seive4.tif",
+                          "25m_MRVBF_Classified_IS64Low6Up2.tif"), sep = "/")# ,"DEM_25m.tif"
 ancDat <- raster::stack(covars)
 proj4string(ancDat) <- "+init=epsg:3005"
 ##in this case we're only using walkFast
@@ -34,7 +35,7 @@ slope <- raster(list.files(datLoc, full.name = TRUE)[slope_raster])
 
 proj4string(slope) <- "+init=epsg:3005"
 # read in already sampled locations
-included <- st_read(paste0(datLoc,"/ESSF_samples.gpkg"))
+included <- st_read(paste0(datLoc,"/ESSF_sampledpairs.gpkg"))
 
 ##read in buffer
 buff <- st_read("InputData/ESSF_Buffer.gpkg")
@@ -42,7 +43,7 @@ buff <- st_read("InputData/ESSF_Buffer.gpkg")
 ## clip to just ESSF
 boundary <- st_read(paste0(datLoc,"/bec_edited.gpkg"))
 boundary <- boundary[,"MAP_LABEL"]
-boundary <- boundary[boundary$MAP_LABEL == "ESSFmc",]
+boundary <- boundary[boundary$MAP_LABEL == "ESSFmc",] ## set as mask for individual BGC
 b2 <- st_union(boundary)
 b2 <- fasterize(boundary, slope)
 buff <- fasterize(buff, slope)
@@ -67,7 +68,7 @@ names(cost) <- "cost"
 tr <- transition(cost, transitionFunction = function(x) 1/mean(x), directions = 8) 
 
 # read in already sampled locations
-included <- st_read(paste0(datLoc,"/ESSF_samples.gpkg"))
+included <- st_read(paste0(datLoc,"/ESSF_sampledpairs.gpkg"))
 included <- st_transform(included, st_crs(ancDat))
 
 source_python("./mTSP.py")
@@ -170,7 +171,7 @@ stats <- stats[stats$num == "6 6",]
 ids <- rownames(stats[order(stats$cost),])
 
 for(x in 1:length(ids)){
-  writeLayout(id = ids[x], filename = paste0("ESSF_",x,".gpkg"))
+  writeLayout(id = ids[x], filename = paste0("ESSFnew_",x,".gpkg"))
 }
 
 writeLayout <- function(id,filename){
@@ -223,33 +224,33 @@ writeLayout <- function(id,filename){
 # ### unsliced (cost layer includes all drop points)
 
 
-temp <- mask(acost, buff)
-writeRaster(temp, "CostSurface.tif",format = "GTiff")
+# temp <- mask(acost, buff)
+# writeRaster(temp, "CostSurface.tif",format = "GTiff")
 
 #################################################################
 
-## sliced clhs
-getSample <- function(index){
-  acost <- accCost(tr, start[index,])
-  
-  tempBuff <- st_buffer(heliDrop[index,],dist = 4000)
-  tempBuffR <- fasterize(tempBuff, acost)
-  acost <- mask(acost, tempBuffR, updatevalue = 10000)
-  lays <- stack(ancDat,acost)
-  names(lays) <- c("DAH","LFC","MRVBF","DEM","cost")
-  
-  s <- sampleRegular(lays , size = 500000, sp = TRUE) # sample raster
-  s <- s[!is.na(s$DAH) & !is.infinite(s$cost),]
-  return(s)
-}
-
-s <- getSample(1)
-spoints <- clhs(s,size = 5, cost = "cost", iter = 5000, simple = F,progress = T)
-for(site in 2:10) {
-  prevSampled <- spoints$sampled_data
-  s <- getSample(site)
-  s <- rbind(prevSampled,s)
-  spoints <- clhs(s,size = length(prevSampled)+5,include = 1:length(prevSampled), 
-                  cost = "cost", iter = 5000, simple = F,progress = T)
-}
-##now go to line 74
+# ## sliced clhs
+# getSample <- function(index){
+#   acost <- accCost(tr, start[index,])
+#   
+#   tempBuff <- st_buffer(heliDrop[index,],dist = 4000)
+#   tempBuffR <- fasterize(tempBuff, acost)
+#   acost <- mask(acost, tempBuffR, updatevalue = 10000)
+#   lays <- stack(ancDat,acost)
+#   names(lays) <- c("DAH","LFC","MRVBF","DEM","cost")
+#   
+#   s <- sampleRegular(lays , size = 500000, sp = TRUE) # sample raster
+#   s <- s[!is.na(s$DAH) & !is.infinite(s$cost),]
+#   return(s)
+# }
+# 
+# s <- getSample(1)
+# spoints <- clhs(s,size = 5, cost = "cost", iter = 5000, simple = F,progress = T)
+# for(site in 2:10) {
+#   prevSampled <- spoints$sampled_data
+#   s <- getSample(site)
+#   s <- rbind(prevSampled,s)
+#   spoints <- clhs(s,size = length(prevSampled)+5,include = 1:length(prevSampled), 
+#                   cost = "cost", iter = 5000, simple = F,progress = T)
+# }
+# ##now go to line 74
