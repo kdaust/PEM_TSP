@@ -25,7 +25,7 @@ proj4string(ancDat) <- "+init=epsg:3005"
 rd1 <- 0.0003125
 rd2 <- 0.000625
 track <- 0.00125
-walkFast <- 0.0125
+walkFast <- 0.01667# 0.0125
 walkSlow <- 0.01667
 slopeAdjust <- function(slope){1+((slope-25)*0.02)}
 
@@ -34,14 +34,12 @@ slope_raster <-  grep("^slope", list.files(datLoc))
 slope <- raster(list.files(datLoc, full.name = TRUE)[slope_raster])
 
 proj4string(slope) <- "+init=epsg:3005"
-# read in already sampled locations
-included <- st_read(paste0(datLoc,"/ESSF_sampledpairs.gpkg"))
 
 ##read in buffer
-buff <- st_read("InputData/ESSF_Buffer.gpkg")
+buff <- st_read(paste0(datLocGit,"/ESSF_Buffer.gpkg"))
 
 ## clip to just ESSF
-boundary <- st_read(paste0(datLoc,"/bec_edited.gpkg"))
+boundary <- st_read(paste0(datLocGit,"/bec_edited.gpkg"))
 boundary <- boundary[,"MAP_LABEL"]
 boundary <- boundary[boundary$MAP_LABEL == "ESSFmc",] ## set as mask for individual BGC
 b2 <- st_union(boundary)
@@ -51,7 +49,7 @@ buff <- mask(buff,b2)
 ancDat <- mask(ancDat,buff)
 
 ##read in drop points
-heliDrop <- st_read(paste0(datLoc,"/DropCombined.gpkg"))
+heliDrop <- st_read(paste0(datLocGit,"/DropCombined.gpkg"))
 heliDrop <- heliDrop[,"name"]
 heliDrop <- st_transform(heliDrop, 3005)
 #heliDrop <- st_zm(heliDrop)
@@ -158,7 +156,8 @@ outStats <- foreach(i = 1:ncol(combs), .combine = c,
   res <- createLayout(startPnts = start[c(combs[1,i],combs[2,i]),],toInclude = included, nPoints = 10)
   route <- res$route
   temp <- data.frame(start = paste(combs[1,i],combs[2,i],sep = "_"),cost = sum(unlist(route[[2]])), 
-             num = paste(length(route[[1]][["0"]]),length(route[[1]][["1"]])), objFun = res$objective)
+             num = paste(length(route[[1]][["0"]]),length(route[[1]][["1"]])), objFun = res$objective,
+             totNum = sum(length(route[[1]][["0"]]),length(route[[1]][["1"]])))
   out <- list(list(stats = temp, solution = route,points = res$pnts))
   names(out) <- i
   out
@@ -167,14 +166,14 @@ outStats <- foreach(i = 1:ncol(combs), .combine = c,
 stats <- foreach(i = 1:ncol(combs), .combine = rbind) %do% {
   outStats[[i]][["stats"]]
 }
-stats <- stats[stats$num == "6 6",]
+stats <- stats[stats$totNum == 12,]
 ids <- rownames(stats[order(stats$cost),])
 
 for(x in 1:length(ids)){
   writeLayout(id = ids[x], filename = paste0("ESSFnew_",x,".gpkg"))
 }
 
-writeLayout <- function(id,filename){
+  writeLayout <- function(id,filename){
   vrp <- outStats[[id]][["solution"]]
   pnts <- outStats[[id]][["points"]]
   result <- vrp[[1]]
