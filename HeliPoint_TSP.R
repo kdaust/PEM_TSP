@@ -14,10 +14,11 @@ library(here)
 Rcpp::sourceCpp("CppCLHS.cpp")
 source("FastCLHS_R.R")
 
-datLoc <- here("InputData") 
+datLoc <- here("LocalData") 
+datLocGit <- here("InputData")
 ### landscape levels covariates
 covars <- paste(datLoc, c("25m_DAH_3Class.tif","25m_LandformClass_Default_Seive4.tif",
-                          "25m_MRVBF_Classified_IS64Low6Up2.tif","DEM_25m.tif"), sep = "/")
+                          "25m_MRVBF_Classified_IS64Low6Up2.tif","dem.tif"), sep = "/")
 ancDat <- raster::stack(covars)
 proj4string(ancDat) <- "+init=epsg:3005"
 ##in this case we're only using walkFast
@@ -34,13 +35,13 @@ slope <- raster(list.files(datLoc, full.name = TRUE)[slope_raster])
 
 proj4string(slope) <- "+init=epsg:3005"
 # read in already sampled locations
-included <- st_read(paste0(datLoc,"/ESSF_samples.gpkg"))
+included <- st_read(paste0(datLocGit,"/ESSF_samples.gpkg"))
 
 ##read in buffer
-buff <- st_read("InputData/ESSF_Buffer.gpkg")
+buff <- st_read(paste0(datLocGit,"/ESSF_Buffer.gpkg"))
 
 ## clip to just ESSF
-boundary <- st_read(paste0(datLoc,"/bec_edited.gpkg"))
+boundary <- st_read(paste0(datLocGit,"/bec_edited.gpkg"))
 boundary <- boundary[,"MAP_LABEL"]
 boundary <- boundary[boundary$MAP_LABEL == "ESSFmc",]
 b2 <- st_union(boundary)
@@ -50,7 +51,7 @@ buff <- mask(buff,b2)
 ancDat <- mask(ancDat,buff)
 
 ##read in drop points
-heliDrop <- st_read(paste0(datLoc,"/DropCombined.gpkg"))
+heliDrop <- st_read(paste0(datLocGit,"/DropCombined.gpkg"))
 heliDrop <- heliDrop[,"name"]
 heliDrop <- st_transform(heliDrop, 3005)
 #heliDrop <- st_zm(heliDrop)
@@ -67,7 +68,7 @@ names(cost) <- "cost"
 tr <- transition(cost, transitionFunction = function(x) 1/mean(x), directions = 8) 
 
 # read in already sampled locations
-included <- st_read(paste0(datLoc,"/ESSF_samples.gpkg"))
+included <- st_read(paste0(datLocGit,"/ESSF_samples.gpkg"))
 included <- st_transform(included, st_crs(ancDat))
 
 source_python("./mTSP.py")
@@ -157,7 +158,8 @@ outStats <- foreach(i = 1:ncol(combs), .combine = c,
   res <- createLayout(startPnts = start[c(combs[1,i],combs[2,i]),],toInclude = included, nPoints = 10)
   route <- res$route
   temp <- data.frame(start = paste(combs[1,i],combs[2,i],sep = "_"),cost = sum(unlist(route[[2]])), 
-             num = paste(length(route[[1]][["0"]]),length(route[[1]][["1"]])), objFun = res$objective)
+             num = paste(length(route[[1]][["0"]]),length(route[[1]][["1"]])), objFun = res$objective,
+             totNum = sum(length(route[[1]][["0"]]),length(route[[1]][["1"]])))
   out <- list(list(stats = temp, solution = route,points = res$pnts))
   names(out) <- i
   out
@@ -166,14 +168,14 @@ outStats <- foreach(i = 1:ncol(combs), .combine = c,
 stats <- foreach(i = 1:ncol(combs), .combine = rbind) %do% {
   outStats[[i]][["stats"]]
 }
-stats <- stats[stats$num == "6 6",]
+stats <- stats[stats$totNum == 12,]
 ids <- rownames(stats[order(stats$cost),])
 
 for(x in 1:length(ids)){
-  writeLayout(id = ids[x], filename = paste0("ESSF_",x,".gpkg"))
+  writeLayout(id = ids[x], filename = paste0("ESSF_Test_",x,".gpkg"))
 }
 
-writeLayout <- function(id,filename){
+  writeLayout <- function(id,filename){
   vrp <- outStats[[id]][["solution"]]
   pnts <- outStats[[id]][["points"]]
   result <- vrp[[1]]
