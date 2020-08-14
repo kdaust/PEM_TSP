@@ -32,8 +32,10 @@ slopeAdjust <- function(slope){1+((slope-25)*0.02)}
 # read in slope data
 slope_raster <-  grep("^slope", list.files(datLoc))
 slope <- raster(list.files(datLoc, full.name = TRUE)[slope_raster])
-
 proj4string(slope) <- "+init=epsg:3005"
+
+alt <- raster(paste0(datLoc, "/dem.tif"))
+proj4string(alt) <- "+init=epsg:3005"
 # read in already sampled locations
 included <- st_read(paste0(datLocGit,"/ESSF_samples.gpkg"))
 
@@ -60,12 +62,18 @@ heliDrop <- heliDrop[boundary,]
 start <- as(heliDrop, "Spatial")
 
 #slope <- raster(paste0(shapes_path,"/slope.tif"))
-cost <- tan(slope)*100
-cost[cost < 25] <- walkFast 
-cost[cost >= 25] <- walkFast*slopeAdjust(cost[cost >= 25])
-names(cost) <- "cost"
 
-tr <- transition(cost, transitionFunction = function(x) 1/mean(x), directions = 8) 
+# cost <- tan(slope)*100
+# cost[cost < 25] <- walkFast 
+# cost[cost >= 25] <- walkFast*slopeAdjust(cost[cost >= 25])
+# names(cost) <- "cost"
+
+altDiff <- function(x){x[1]-x[2]}
+tr <- transition(alt, transitionFunction = altDiff, directions = 8, symm = F) 
+tr <- geoCorrection(tr)
+adj <- adjacent(alt, cells = 1:ncell(alt), pairs = T, directions = 8)
+tr[adj] <- 6*exp(-3.5*abs(tr[adj] + 0.05)) ##tobler's hiking function
+tr <- geoCorrection(tr)
 
 # read in already sampled locations
 included <- st_read(paste0(datLocGit,"/ESSF_samples.gpkg"))
