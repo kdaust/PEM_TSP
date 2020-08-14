@@ -14,18 +14,18 @@ library(here)
 Rcpp::sourceCpp("CppCLHS.cpp")
 source("FastCLHS_R.R")
 
-datLoc <- here("LocalData") 
-datLocGit <- here("InputData")
+datLoc <- here("InputData") 
+covLoc <- here("Covariates")
 ### landscape levels covariates
-covars <- paste(datLoc, c("25m_DAH_3Class.tif","25m_LandformClass_Default_Seive4.tif",
-                          "25m_MRVBF_Classified_IS64Low6Up2.tif","dem.tif"), sep = "/")
+covars <- paste(covLoc, c("25m_DAH_3Class.tif","25m_LandformClass_Default_Seive4.tif",
+                          "25m_MRVBF_Classified_IS64Low6Up2.tif"), sep = "/")# ,"DEM_25m.tif"
 ancDat <- raster::stack(covars)
 proj4string(ancDat) <- "+init=epsg:3005"
 ##in this case we're only using walkFast
 rd1 <- 0.0003125
 rd2 <- 0.000625
 track <- 0.00125
-walkFast <- 0.0125
+walkFast <- 0.01667# 0.0125
 walkSlow <- 0.01667
 slopeAdjust <- function(slope){1+((slope-25)*0.02)}
 
@@ -45,7 +45,7 @@ buff <- st_read(paste0(datLocGit,"/ESSF_Buffer.gpkg"))
 ## clip to just ESSF
 boundary <- st_read(paste0(datLocGit,"/bec_edited.gpkg"))
 boundary <- boundary[,"MAP_LABEL"]
-boundary <- boundary[boundary$MAP_LABEL == "ESSFmc",]
+boundary <- boundary[boundary$MAP_LABEL == "ESSFmc",] ## set as mask for individual BGC
 b2 <- st_union(boundary)
 b2 <- fasterize(boundary, slope)
 buff <- fasterize(buff, slope)
@@ -76,7 +76,7 @@ tr[adj] <- 6*exp(-3.5*abs(tr[adj] + 0.05)) ##tobler's hiking function
 tr <- geoCorrection(tr)
 
 # read in already sampled locations
-included <- st_read(paste0(datLocGit,"/ESSF_samples.gpkg"))
+included <- st_read(paste0(datLoc,"/ESSF_sampledpairs.gpkg"))
 included <- st_transform(included, st_crs(ancDat))
 
 source_python("./mTSP.py")
@@ -180,7 +180,7 @@ stats <- stats[stats$totNum == 12,]
 ids <- rownames(stats[order(stats$cost),])
 
 for(x in 1:length(ids)){
-  writeLayout(id = ids[x], filename = paste0("ESSF_Test_",x,".gpkg"))
+  writeLayout(id = ids[x], filename = paste0("ESSFnew_",x,".gpkg"))
 }
 
   writeLayout <- function(id,filename){
@@ -233,33 +233,33 @@ for(x in 1:length(ids)){
 # ### unsliced (cost layer includes all drop points)
 
 
-temp <- mask(acost, buff)
-writeRaster(temp, "CostSurface.tif",format = "GTiff")
+# temp <- mask(acost, buff)
+# writeRaster(temp, "CostSurface.tif",format = "GTiff")
 
 #################################################################
 
-## sliced clhs
-getSample <- function(index){
-  acost <- accCost(tr, start[index,])
-  
-  tempBuff <- st_buffer(heliDrop[index,],dist = 4000)
-  tempBuffR <- fasterize(tempBuff, acost)
-  acost <- mask(acost, tempBuffR, updatevalue = 10000)
-  lays <- stack(ancDat,acost)
-  names(lays) <- c("DAH","LFC","MRVBF","DEM","cost")
-  
-  s <- sampleRegular(lays , size = 500000, sp = TRUE) # sample raster
-  s <- s[!is.na(s$DAH) & !is.infinite(s$cost),]
-  return(s)
-}
-
-s <- getSample(1)
-spoints <- clhs(s,size = 5, cost = "cost", iter = 5000, simple = F,progress = T)
-for(site in 2:10) {
-  prevSampled <- spoints$sampled_data
-  s <- getSample(site)
-  s <- rbind(prevSampled,s)
-  spoints <- clhs(s,size = length(prevSampled)+5,include = 1:length(prevSampled), 
-                  cost = "cost", iter = 5000, simple = F,progress = T)
-}
-##now go to line 74
+# ## sliced clhs
+# getSample <- function(index){
+#   acost <- accCost(tr, start[index,])
+#   
+#   tempBuff <- st_buffer(heliDrop[index,],dist = 4000)
+#   tempBuffR <- fasterize(tempBuff, acost)
+#   acost <- mask(acost, tempBuffR, updatevalue = 10000)
+#   lays <- stack(ancDat,acost)
+#   names(lays) <- c("DAH","LFC","MRVBF","DEM","cost")
+#   
+#   s <- sampleRegular(lays , size = 500000, sp = TRUE) # sample raster
+#   s <- s[!is.na(s$DAH) & !is.infinite(s$cost),]
+#   return(s)
+# }
+# 
+# s <- getSample(1)
+# spoints <- clhs(s,size = 5, cost = "cost", iter = 5000, simple = F,progress = T)
+# for(site in 2:10) {
+#   prevSampled <- spoints$sampled_data
+#   s <- getSample(site)
+#   s <- rbind(prevSampled,s)
+#   spoints <- clhs(s,size = length(prevSampled)+5,include = 1:length(prevSampled), 
+#                   cost = "cost", iter = 5000, simple = F,progress = T)
+# }
+# ##now go to line 74
