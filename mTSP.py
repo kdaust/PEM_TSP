@@ -84,7 +84,7 @@ def py_mTSP(dat, num_days, start, end, max_cost, plot_time, penalty, arbDepot):
                 previous_index, index, vehicle_id)
         temp.append(manager.IndexToNode(index))
         if(arbDepot):
-            temp = temp[1:-1]
+            temp = temp[:-1]
         plan_output[vehicle_id] = temp
         dist_output[vehicle_id] = rd
     
