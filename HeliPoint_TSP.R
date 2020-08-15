@@ -37,7 +37,7 @@ proj4string(slope) <- "+init=epsg:3005"
 alt <- raster(paste0(datLoc, "/dem.tif"))
 proj4string(alt) <- "+init=epsg:3005"
 # read in already sampled locations
-included <- st_read(paste0(datLocGit,"/ESSF_samples.gpkg"))
+included <- st_read(paste0(datLocGit,"/ESSF_sampledpairs.gpkg"))
 
 ##read in buffer
 buff <- st_read(paste0(datLocGit,"/ESSF_Buffer.gpkg"))
@@ -72,37 +72,54 @@ altDiff <- function(x){x[1]-x[2]}
 tr <- transition(alt, transitionFunction = altDiff, directions = 8, symm = F) 
 tr <- geoCorrection(tr)
 adj <- adjacent(alt, cells = 1:ncell(alt), pairs = T, directions = 8)
-tr[adj] <- 6*exp(-3.5*abs(tr[adj] + 0.05)) ##tobler's hiking function
+tr[adj] <- 1.5*exp(-3.5*abs(tr[adj] + 0.1)) ##tobler's hiking function
 tr <- geoCorrection(tr)
 
 # read in already sampled locations
-included <- st_read(paste0(datLoc,"/ESSF_sampledpairs.gpkg"))
+included <- st_read(paste0(datLocGit,"/ESSF_sampledpairs.gpkg"))
 included <- st_transform(included, st_crs(ancDat))
 
 source_python("./mTSP.py")
 maxTime <- 8L ##hours
 plotTime <- 45L ##mins
 
-createLayout <- function(startPnts, toInclude, nPoints){
-  acost <- accCost(tr, startPnts)
-  lays <- stack(ancDat,acost)
-  names(lays) <- c("DAH","LFC","MRVBF","DEM","cost")
-  
-  incPnts <- raster::extract(lays, toInclude, sp = T)
-  incPnts <- incPnts[,-(1:3)]
-  incPnts <- st_as_sf(incPnts)
-  
-  s <- sampleRegular(lays , size = 500000, sp = TRUE) # sample raster
-  s <- s[!is.na(s$DAH) & !is.infinite(s$cost),]
-  s2 <- st_as_sf(s)
-  ## have to add already sampled points to data
-  s <- rbind(incPnts, s2)
-  
-  ### get sample locations
-  spoints <- clhs_dist(s,size = nPoints+nrow(toInclude), minDist = 260, maxCost = 2, include = 1:nrow(toInclude), 
-                       cost = "cost", iter = 2000, simple = F,progress = T)
-  ############################################################################
-  
+listComb <- function(a,b){
+  t1 <- rbind(a$sampled_data,b$sampled_data)
+  t2 <- b$obj
+  t3 <- c(a$final_obj,b$final_obj)
+  list(sampled_data = t1, obj = t2, final_obj = t3)
+}
+
+createLayout <- function(startPnts, toInclude, nPoints, iter = 1000){
+  spoints <- foreach(x = 1:2, .combine = listComb) %do% {
+    acost <- accCost(tr, startPnts[x,])
+    acost <- acost/3600
+    lays <- stack(ancDat,acost)
+    names(lays) <- c("DAH","LFC","MRVBF","DEM","cost")
+    
+    incPnts <- raster::extract(lays, toInclude, sp = T)
+    incPnts <- incPnts[,-(1:3)]
+    incPnts <- st_as_sf(incPnts)
+    if(x == 2){
+      inc2 <- templhs$sampled_data
+      temp <- raster::extract(acost, inc2["geometry"], sp = T) %>% st_as_sf()
+      inc2$cost <- temp$layer
+      incPnts <- rbind(incPnts, inc2)
+    }
+    
+    s <- sampleRegular(lays , size = 500000, sp = TRUE) # sample raster
+    s <- s[!is.na(s$DAH) & !is.infinite(s$cost),]
+    s2 <- st_as_sf(s)
+    ## have to add already sampled points to data
+    s <- rbind(incPnts, s2)
+    
+    ### get sample locations
+    templhs <- clhs_dist(s,size = nPoints/2+nrow(incPnts), minDist = 260, maxCost = 2, include = 1:nrow(incPnts), 
+                         cost = "cost", iter = iter, simple = F,progress = T)
+    
+    list(sampled_data = templhs$sampled_data,obj = templhs$obj, final_obj = templhs$final_obj)
+  }
+
   pnts <- spoints$sampled_data
   
   plot(acost)
@@ -119,7 +136,7 @@ createLayout <- function(startPnts, toInclude, nPoints){
   ## create distance matrix between sample points
   test <- costDistance(tr,pnts2,pnts2)
   dMat2 <- as.matrix(test)
-  dMat2 <- dMat2*60
+  dMat2 <- dMat2/60
   dMat2[is.infinite(dMat2)] <- 1000
   
   
@@ -144,7 +161,7 @@ createLayout <- function(startPnts, toInclude, nPoints){
   vrp <- py_mTSP(dat = dMat2,num_days = 2L, start = indStart, end = indEnd, 
                  max_cost = maxTime*60L, plot_time = plotTime, penalty =  objVals, arbDepot = T)
   
-  return(list(route = vrp, objective = spoints$obj[2000],pnts = pnts))
+  return(list(route = vrp, objective = spoints$obj[iter],pnts = pnts))
 }
 
 worker.init <- function(){
@@ -160,7 +177,7 @@ dropInd <- 1:nrow(heliDrop)
 combs <- combn(dropInd, m = 2)
 
 outStats <- foreach(i = 1:ncol(combs), .combine = c, 
-                    .packages = c("Rcpp","reticulate","sf","raster","gdistance"),
+                    .packages = c("Rcpp","reticulate","sf","raster","gdistance","foreach"),
                     .noexport = "c_cor") %dopar% {
   source_python("./mTSP.py")
   res <- createLayout(startPnts = start[c(combs[1,i],combs[2,i]),],toInclude = included, nPoints = 10)
@@ -176,14 +193,14 @@ outStats <- foreach(i = 1:ncol(combs), .combine = c,
 stats <- foreach(i = 1:ncol(combs), .combine = rbind) %do% {
   outStats[[i]][["stats"]]
 }
-stats <- stats[stats$totNum == 12,]
+stats <- stats[stats$num == "6 6",]
 ids <- rownames(stats[order(stats$cost),])
 
 for(x in 1:length(ids)){
   writeLayout(id = ids[x], filename = paste0("ESSFnew_",x,".gpkg"))
 }
 
-  writeLayout <- function(id,filename){
+writeLayout <- function(id,filename){
   vrp <- outStats[[id]][["solution"]]
   pnts <- outStats[[id]][["points"]]
   result <- vrp[[1]]
