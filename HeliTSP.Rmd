@@ -1,0 +1,284 @@
+---
+title: "TravellingSalesman Heli Layout"
+author: "Kiri Daust"
+date: "14/08/2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(clhs)
+library(sf)
+library(raster)
+library(sp)
+library(gdistance)
+library(foreach)
+library(data.table)
+library(fasterize)
+library(reticulate)
+library(here)
+```
+
+## Intro
+
+This script uses cost constrained latin hypercube and a travelling salesman algorithm to create a sample plan for helicopter work in the ESSF of the Deception AOI. 
+
+### Source scripts
+
+```{r source}
+Rcpp::sourceCpp("CppCLHS.cpp")
+source("FastCLHS_R.R")
+source_python("./mTSP.py")
+```
+
+### Load data
+
+Set aoi to ESSFmc or ESSFmcw depending on interest.
+
+```{r data}
+aoi <- "ESSFmc"
+datLocGit <- here("InputData") ## Data
+covLoc <- here("Covariates") ## Too big for git data
+### landscape levels covariates
+covars <- paste(covLoc, c("25m_DAH_3Class.tif","25m_LandformClass_Default_Seive4.tif",
+                          "25m_MRVBF_Classified_IS64Low6Up2.tif","dem.tif"), sep = "/")# ,"DEM_25m.tif"
+layerNames <- c("DAH","LFC","MRVBF","DEM","cost") ##need to change this if you change the layers
+ancDat <- raster::stack(covars)
+proj4string(ancDat) <- "+init=epsg:3005"
+
+# read in slope data
+slope_raster <-  grep("^slope", list.files(covLoc))
+slope <- raster(list.files(covLoc, full.name = TRUE)[slope_raster])
+proj4string(slope) <- "+init=epsg:3005"
+
+## dem for transtion layer
+alt <- raster(paste0(covLoc, "/dem.tif"))
+proj4string(alt) <- "+init=epsg:3005"
+
+# read in already sampled locations
+included <- st_read(paste0(datLocGit,"/ESSF_sampledpairs.gpkg"))
+included <- st_transform(included, st_crs(ancDat))
+
+##road and lake buffer
+buff <- st_read(paste0(datLocGit,"/ESSF_Buffer.gpkg"))
+
+## clip to just ESSF
+boundary <- st_read(paste0(datLocGit,"/bec_edited.gpkg"))
+boundary <- boundary[,"MAP_LABEL"]
+boundary <- boundary[boundary$MAP_LABEL == aoi,] ## set as mask for individual BGC
+b2 <- st_union(boundary)
+b2 <- fasterize(boundary, slope)
+buff <- fasterize(buff, slope)
+buff <- mask(buff,b2)
+ancDat <- mask(ancDat,buff)
+
+##read in drop points
+heliDrop <- st_read(paste0(datLocGit,"/DropCombined.gpkg"))
+heliDrop <- heliDrop[,"name"]
+heliDrop <- st_transform(heliDrop, 3005)
+heliDrop <- st_zm(heliDrop)
+heliDrop <- heliDrop[boundary,]
+start <- as(heliDrop, "Spatial")
+
+```
+
+### Create transition layer
+
+This chunk creates a transition layer from the DEM to account for downhill and uphill sections. It uses an adaptions to Tobler's hiking function to calculate potential walking speed. 
+
+```{r translayer}
+altDiff <- function(x){x[1]-x[2]}
+tr <- transition(alt, transitionFunction = altDiff, directions = 8, symm = F) 
+tr <- geoCorrection(tr)
+adj <- adjacent(alt, cells = 1:ncell(alt), pairs = T, directions = 8)
+tr[adj] <- 1.5*exp(-3.5*abs(tr[adj] + 0.1)) ##tobler's hiking function
+tr <- geoCorrection(tr)
+```
+
+### Setup to run TSP
+
+```{r setup}
+##max time per day
+maxTime <- 8L ##hours
+## time per transect
+plotTime <- 45L ##mins
+
+listComb <- function(a,b){
+  t1 <- rbind(a$sampled_data,b$sampled_data)
+  t2 <- b$obj
+  t3 <- c(a$final_obj,b$final_obj)
+  list(sampled_data = t1, obj = t2, final_obj = t3)
+}
+
+###main function to create layout
+createLayout <- function(startPnts, toInclude, nPoints, iter = 1000){
+  spoints <- foreach(x = 1:2, .combine = listComb) %do% { ##run one slice per drop point
+    acost <- accCost(tr, startPnts[x,])
+    acost <- acost/3600
+    lays <- stack(ancDat,acost)
+    names(lays) <- layerNames
+    
+    incPnts <- raster::extract(lays, toInclude, sp = T)
+    incPnts <- incPnts[,-(1:3)]
+    incPnts <- st_as_sf(incPnts)
+    if(x == 2){ ##add points from slice 1
+      inc2 <- templhs$sampled_data
+      temp <- raster::extract(acost, inc2["geometry"], sp = T) %>% st_as_sf()
+      inc2$cost <- temp$layer
+      incPnts <- rbind(incPnts, inc2)
+    }
+    
+    s <- sampleRegular(lays , size = 500000, sp = TRUE) # sample raster
+    s <- s[!is.na(s$DAH) & !is.infinite(s$cost),]
+    s2 <- st_as_sf(s)
+    ## have to add already sampled points to data
+    s <- rbind(incPnts, s2)
+    
+    ### run clhs (new parameters are minDist and maxCost)
+    templhs <- clhs_dist(s,size = nPoints/2+nrow(incPnts), minDist = 260, 
+                         maxCost = 2, include = 1:nrow(incPnts), 
+                         cost = "cost", iter = iter, simple = F,progress = T)
+    
+    list(sampled_data = templhs$sampled_data,obj = templhs$obj, final_obj = templhs$final_obj)
+  }
+
+  pnts <- spoints$sampled_data
+  
+  plot(acost)
+  plot(pnts, add = T)
+  
+  p2 <- st_as_sf(pnts)
+  pnts <- pnts[,"DAH"]
+  colnames(pnts) <- c("name","geometry")
+  st_geometry(pnts) <- "geometry"
+  startPnts <- st_as_sf(startPnts) %>% st_transform(st_crs(pnts))
+  pnts <- rbind(pnts, startPnts)
+  pnts2 <- as(pnts, "Spatial")
+  
+  ## create distance matrix between sample points
+  test <- costDistance(tr,pnts2,pnts2)
+  dMat2 <- as.matrix(test)
+  dMat2 <- dMat2/60
+  dMat2[is.infinite(dMat2)] <- 1000
+  
+  ##penalty based on quality of points
+  objVals <- spoints[["final_obj"]][1:nPoints]
+  objVals <- max(objVals) - objVals
+  minPen <- (maxTime*60L)/2L
+  maxPen <- (maxTime*60L)*2L
+  objVals <- scales::rescale(objVals, to = c(minPen,maxPen))
+  objVals <- as.integer(objVals)
+
+  ##fixed start, arbitrary end
+  dMat2 <- rbind(dMat2, rep(0, ncol(dMat2)))
+  dMat2 <- cbind(dMat2, rep(0, nrow(dMat2)))
+  indStart <- as.integer(nPoints:(nPoints+nrow(startPnts)-1))
+  indEnd <- as.integer(rep(nrow(dMat2)-1,nrow(startPnts)))
+  
+  ##run vehicle routing problem from python script
+  ## GCS is global span cost coefficient
+  vrp <- py_mTSP(dat = dMat2,num_days = 2L, start = indStart, end = indEnd, 
+                 max_cost = maxTime*60L, plot_time = plotTime, penalty =  objVals, arbDepot = T, GSC = 8)
+  
+  return(list(route = vrp, objective = spoints$obj[iter],pnts = pnts))
+}
+
+```
+
+### Set up parallel workers
+
+```{r parallel}
+worker.init <- function(){
+  Rcpp::sourceCpp("CppCLHS.cpp")
+}
+
+require(doParallel)
+cl <- makePSOCKcluster(detectCores()-2)
+clusterCall(cl, worker.init)
+registerDoParallel(cl)
+```
+
+### Create layout for each combination of dropsites
+
+```{r runLayout}
+dropInd <- 1:nrow(heliDrop)
+combs <- combn(dropInd, m = 2) ## pair combinations
+
+### run clhs and tsp
+outStats <- foreach(i = 1:ncol(combs), .combine = c, 
+                    .packages = c("Rcpp","reticulate","sf","raster","gdistance","foreach"),
+                    .noexport = "c_cor") %dopar% {
+  source_python("./mTSP.py")
+  res <- createLayout(startPnts = start[c(combs[1,i],combs[2,i]),],toInclude = included, nPoints = 10)
+  route <- res$route
+  temp <- data.frame(start = paste(combs[1,i],combs[2,i],sep = "_"),cost = sum(unlist(route[[2]])), 
+             num = paste(length(route[[1]][["0"]]),length(route[[1]][["1"]])), objFun = res$objective,
+             totNum = sum(length(route[[1]][["0"]]),length(route[[1]][["1"]])))
+  out <- list(list(stats = temp, solution = route,points = res$pnts))
+  names(out) <- i
+  out
+}
+
+### extract statistics from result
+stats <- foreach(i = 1:ncol(combs), .combine = rbind) %do% {
+  outStats[[i]][["stats"]]
+}
+##subset to runs with 5 transects in each drop
+stats <- stats[stats$num == "6 6",]
+ids <- rownames(stats[order(stats$cost),])
+```
+
+### Create shortest paths and output routes
+
+```{r output}
+
+## function to create and output layout for each id
+writeLayout <- function(id,filename){
+  vrp <- outStats[[id]][["solution"]]
+  pnts <- outStats[[id]][["points"]]
+  result <- vrp[[1]]
+  
+  ## create spatial paths
+  paths <- foreach(j = 0:(length(result)-1), .combine = rbind) %do% {
+    if(length(result[[as.character(j)]]) > 2){
+      cat("Drop site",j,"...\n")
+      p1 <- result[[as.character(j)]]+1
+      out <- foreach(i = 1:(length(p1)-1), .combine = rbind) %do% {
+        temp1 <- pnts[p1[i],]
+        temp2 <- pnts[p1[i+1],]
+        temp3 <- shortestPath(tr,st_coordinates(temp1),
+                              st_coordinates(temp2),output = "SpatialLines") %>% st_as_sf()
+        temp3$Segment = i
+        temp3
+      }
+      out$DropSite = j
+      out
+    }
+    
+  }
+
+  paths <- st_transform(paths, 3005)
+  st_write(paths, dsn = filename, layer = "Paths", append = T, driver = "GPKG")  
+  
+  ## label points
+  p2 <- pnts
+  p2$PID <- seq_along(p2$name)
+  p2 <- p2[,"PID"]
+  p2$DropLoc <- NA
+  p2$Order <- NA
+  for(i in 0:(length(result)-1)){
+    p1 <- result[[as.character(i)]]+1
+    p1 <- p1[-c(1,length(p1))]
+    p2$DropLoc[p1] <- i
+    p2$Order[p1] <- 1:(length(p1)+1)
+  }
+  p2 <- st_transform(p2, 3005)
+  st_write(p2, dsn = filename,layer = "Points", append = T,overwrite = T, driver = "GPKG")
+  return(TRUE)
+}
+
+## write gpkgs for each full route
+for(x in 1:length(ids)){
+  writeLayout(id = ids[x], filename = paste0("ESSFnew_",x,".gpkg"))
+}
+```
