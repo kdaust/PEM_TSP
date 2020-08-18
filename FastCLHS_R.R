@@ -28,6 +28,7 @@ lhs_obj <- function(
   
   delta_obj_continuous <- rowSums(abs(cont_obj_sampled - eta))
   cor_sampled <- c_cor(data_continuous_sampled)
+  cor_sampled[is.nan(cor_sampled)] <- 1
   
   delta_obj_cor <- sum(abs(cor_mat - cor_sampled))
   obj <- sum(delta_obj_continuous) +  delta_obj_cor*2
@@ -356,10 +357,16 @@ clhs_dist <- function(
     }
   }
   
+  if(is.null(include)){
+    xnew <- x
+    xnew <- xnew[cost < maxCost,]
+    data_lowcost <- as.matrix(st_drop_geometry(xnew))
+  }else{
+    xnew <- x[-include,]
+    xnew <- xnew[cost[-include] < maxCost,]
+    data_lowcost <- as.matrix(st_drop_geometry(xnew))
+  }
   data_continuous <- as.matrix(st_drop_geometry(x))
-  xnew <- x[-include,]
-  xnew <- xnew[cost[-include] < maxCost,]
-  data_lowcost <- as.matrix(st_drop_geometry(xnew))
   
   metropolis <- exp(-1*0/temp) # Initial Metropolis value
   n_data <- nrow(data_lowcost) # Number of individuals in the data set

@@ -36,7 +36,7 @@ source_python("./mTSP.py")
 Set aoi to ESSFmc or ESSFmcw depending on interest.
 
 ```{r data}
-aoi <- "ESSFmc"
+aoi <- "ESSFmcw"
 datLocGit <- here("InputData") ## Data
 covLoc <- here("Covariates") ## Too big for git data
 ### landscape levels covariates
@@ -54,10 +54,6 @@ proj4string(slope) <- "+init=epsg:3005"
 ## dem for transtion layer
 alt <- raster(paste0(covLoc, "/dem.tif"))
 proj4string(alt) <- "+init=epsg:3005"
-
-# read in already sampled locations
-included <- st_read(paste0(datLocGit,"/ESSF_sampledpairs.gpkg"))
-included <- st_transform(included, st_crs(ancDat))
 
 ##road and lake buffer
 buff <- st_read(paste0(datLocGit,"/ESSF_Buffer.gpkg"))
@@ -80,6 +76,11 @@ heliDrop <- st_zm(heliDrop)
 heliDrop <- heliDrop[boundary,]
 start <- as(heliDrop, "Spatial")
 
+# read in already sampled locations
+included <- st_read(paste0(datLocGit,"/ESSF_sampledpairs.gpkg"))
+included <- st_transform(included, st_crs(ancDat))
+included <- included[boundary,]
+#if(nrow(included) == 0){included = NULL}
 ```
 
 ### Create transition layer
@@ -92,6 +93,7 @@ tr <- transition(alt, transitionFunction = altDiff, directions = 8, symm = F)
 tr <- geoCorrection(tr)
 adj <- adjacent(alt, cells = 1:ncell(alt), pairs = T, directions = 8)
 tr[adj] <- 1.5*exp(-3.5*abs(tr[adj] + 0.1)) ##tobler's hiking function
+
 tr <- geoCorrection(tr)
 ```
 
@@ -112,31 +114,43 @@ listComb <- function(a,b){
 
 ###main function to create layout
 createLayout <- function(startPnts, toInclude, nPoints, iter = 1000){
-  spoints <- foreach(x = 1:2, .combine = listComb) %do% { ##run one slice per drop point
+  isInc <- nrow(toInclude) > 0
+  spoints <- foreach(x = 1:2, .combine = listComb) %do% {##run one slice per drop point
     acost <- accCost(tr, startPnts[x,])
     acost <- acost/3600
     lays <- stack(ancDat,acost)
     names(lays) <- layerNames
     
-    incPnts <- raster::extract(lays, toInclude, sp = T)
-    incPnts <- incPnts[,-(1:3)]
-    incPnts <- st_as_sf(incPnts)
+    if(isInc){
+      incPnts <- raster::extract(lays, toInclude, sp = T)
+      incPnts <- incPnts[,-(1:3)]
+      incPnts <- st_as_sf(incPnts)
+      incIdx <- 1:nrow(incPnts)
+      size = nPoints/2 + nrow(incPnts)
+    }else{
+      incIdx <- NULL
+      size = nPoints/2
+    }
+    
     if(x == 2){ ##add points from slice 1
       inc2 <- templhs$sampled_data
       temp <- raster::extract(acost, inc2["geometry"], sp = T) %>% st_as_sf()
       inc2$cost <- temp$layer
-      incPnts <- rbind(incPnts, inc2)
+      if(isInc) incPnts <- rbind(incPnts, inc2)
+      else incPnts <- inc2
+      incIdx <- 1:nrow(incPnts)
+      size = nPoints/2 + nrow(incPnts)
     }
     
-    s <- sampleRegular(lays , size = 500000, sp = TRUE) # sample raster
+    s <- sampleRegular(lays , size = 5000000, sp = TRUE) # sample raster
     s <- s[!is.na(s$DAH) & !is.infinite(s$cost),]
-    s2 <- st_as_sf(s)
+    s <- st_as_sf(s)
     ## have to add already sampled points to data
-    s <- rbind(incPnts, s2)
+    if(isInc | x == 2 ) s <- rbind(incPnts, s)
     
     ### run clhs (new parameters are minDist and maxCost)
-    templhs <- clhs_dist(s,size = nPoints/2+nrow(incPnts), minDist = 260, 
-                         maxCost = 2, include = 1:nrow(incPnts), 
+    templhs <- clhs_dist(s,size = size, minDist = 260, 
+                         maxCost = 2, include = incIdx, 
                          cost = "cost", iter = iter, simple = F,progress = T)
     
     list(sampled_data = templhs$sampled_data,obj = templhs$obj, final_obj = templhs$final_obj)
