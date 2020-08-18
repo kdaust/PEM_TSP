@@ -18,7 +18,7 @@ datLoc <- here("InputData")
 covLoc <- here("Covariates")
 ### landscape levels covariates
 covars <- paste(covLoc, c("25m_DAH_3Class.tif","25m_LandformClass_Default_Seive4.tif",
-                          "25m_MRVBF_Classified_IS64Low6Up2.tif"), sep = "/")# ,"DEM_25m.tif"
+                          "25m_MRVBF_Classified_IS64Low6Up2.tif","DEM_25m.tif"), sep = "/")# 
 ancDat <- raster::stack(covars)
 proj4string(ancDat) <- "+init=epsg:3005"
 ##in this case we're only using walkFast
@@ -30,8 +30,10 @@ walkSlow <- 0.01667
 slopeAdjust <- function(slope){1+((slope-25)*0.02)}
 
 # read in slope data
-slope_raster <-  grep("^slope", list.files(datLoc))
-slope <- raster(list.files(datLoc, full.name = TRUE)[slope_raster])
+
+slope_raster <-  grep("^slope", list.files(covLoc))
+slope <- raster(list.files(covLoc, full.name = TRUE)[slope_raster])
+
 proj4string(slope) <- "+init=epsg:3005"
 
 alt <- raster(paste0(datLoc, "/dem.tif"))
@@ -40,10 +42,10 @@ proj4string(alt) <- "+init=epsg:3005"
 included <- st_read(paste0(datLocGit,"/ESSF_sampledpairs.gpkg"))
 
 ##read in buffer
-buff <- st_read(paste0(datLocGit,"/ESSF_Buffer.gpkg"))
+buff <- st_read(paste0(datLoc,"/ESSF_Buffer.gpkg"))
 
 ## clip to just ESSF
-boundary <- st_read(paste0(datLocGit,"/bec_edited.gpkg"))
+boundary <- st_read(paste0(datLoc,"/bec_edited.gpkg"))
 boundary <- boundary[,"MAP_LABEL"]
 boundary <- boundary[boundary$MAP_LABEL == "ESSFmc",] ## set as mask for individual BGC
 b2 <- st_union(boundary)
@@ -53,7 +55,7 @@ buff <- mask(buff,b2)
 ancDat <- mask(ancDat,buff)
 
 ##read in drop points
-heliDrop <- st_read(paste0(datLocGit,"/DropCombined.gpkg"))
+heliDrop <- st_read(paste0(datLoc,"/DropCombined.gpkg"))
 heliDrop <- heliDrop[,"name"]
 heliDrop <- st_transform(heliDrop, 3005)
 #heliDrop <- st_zm(heliDrop)
@@ -197,7 +199,7 @@ stats <- stats[stats$num == "6 6",]
 ids <- rownames(stats[order(stats$cost),])
 
 for(x in 1:length(ids)){
-  writeLayout(id = ids[x], filename = paste0("ESSFnew_",x,".gpkg"))
+  writeLayout(id = ids[x], filename = paste0("ESSFtest2_",x,".gpkg"))
 }
 
 writeLayout <- function(id,filename){
