@@ -282,9 +282,9 @@ writeLayout <- function(id,filename){
   p2$Order <- NA
   for(i in 0:(length(result)-1)){
     p1 <- result[[as.character(i)]]+1
-    p1 <- p1[-c(1,length(p1))]
+    p1 <- p1[-1]
     p2$DropLoc[p1] <- i
-    p2$Order[p1] <- 1:(length(p1)+1)
+    p2$Order[p1] <- 1:length(p1)
   }
   p2 <- st_transform(p2, 3005)
   st_write(p2, dsn = filename,layer = "Points", append = T,overwrite = T, driver = "GPKG")
