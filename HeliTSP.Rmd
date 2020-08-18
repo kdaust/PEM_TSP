@@ -192,7 +192,7 @@ createLayout <- function(startPnts, toInclude, nPoints, iter = 1000){
   ##run vehicle routing problem from python script
   ## GCS is global span cost coefficient
   vrp <- py_mTSP(dat = dMat2,num_days = 2L, start = indStart, end = indEnd, 
-                 max_cost = maxTime*60L, plot_time = plotTime, penalty =  objVals, arbDepot = T, GSC = 8)
+                 max_cost = maxTime*60L, plot_time = plotTime, penalty =  objVals, arbDepot = T, GSC = 8L)
   
   return(list(route = vrp, objective = spoints$obj[iter],pnts = pnts))
 }
