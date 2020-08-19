@@ -1,0 +1,15 @@
+road_surface,speed
+Road highway major,80
+Road local,80
+Road collector minor,80
+Road arterial major,80
+Road resource demographic,80
+Road recreation demographic,80
+Road resource,30
+Road unclassified,30
+walk,7
+blkroad,50
+quad,30
+mainline,80
+Trail recreation,7
+Trail,7
