@@ -43,7 +43,8 @@ rdsAll <- as.data.table(rdsAll) %>% st_as_sf()
 
 ##road speed
 rSpd <- fread("road_speed.csv")
-rSpd[,Values := (1/(speed/60))/40]
+#rSpd[,Values := (1/speed)/40]
+rSpd[,Values := speed]
 rdsAll <- merge(rdsAll, rSpd, by = "road_surface", all = F)
 rdsAll <- rdsAll[,"Values"]
 rdsAll <- st_buffer(rdsAll,dist = 35, endCapStyle = "SQUARE", joinStyle = "MITRE")
@@ -57,26 +58,159 @@ proj4string(alt) <- "+init=epsg:3005"
 alt2 <- projectRaster(alt,rdsRast,method = 'ngb')
 altAll <- merge(rdsRast, alt2)
 
+
 trFn <- function(x){
-  if(x[1]|x[2] < 10){
-    return(min(x[1],x[2]))
+  if(x[1] > 500 & x[2] > 500){
+    x[1]-x[2]
   }else{
-    return(x[1]-x[2])
+    min(x[1],x[2])
   }
 }
 
-rdIdx <- which(values(altAll) < 5)
+rdIdx <- which(values(altAll) < 100)
 slpIdx <- which(values(altAll) > 500)
+rdAdj <- adjacent(altAll, cells = rdIdx, pairs = T, directions = 8)
 adj <- adjacent(altAll, cells = slpIdx, pairs = T, directions = 8)
-# adj <- adj[!adj[,1] %in% rdIdx ,]
-# adj <- adj[!adj[,2] %in% rdIdx ,]
+adj <- adj[!adj[,1] %in% rdIdx ,]
+adj <- adj[!adj[,2] %in% rdIdx ,]
 
 tr <- transition(altAll,trFn,directions = 8, symm = F)
-tr1 <- geoCorrection(tr)
-tr1[adj] <- (1.5*exp(-3.5*abs(tr1[adj] + 0.1)))/60 ##tobler's hiking function
-tr1 <- geoCorrection(tr1)
+
+tr1 <- geoCorrection(tr) ##now reciprocal 
+tr1[adj] <- (3/5)*(6*exp(-3.5*abs(tr1[adj] + 0.08))) ##tobler's hiking function * reciprocal of 3/5
+tr2 <- geoCorrection(tr1) ##have to geocorrect this part again
+tr1[adj] <- tr2[adj]
+# tr1[rdAdj] <- 1/0.02
+# tr1[cbind(rdAdj[,2],rdAdj[,1])] <- 1/0.02
+# tr1 <- geoCorrection(tr1)
 
 start <- st_read("SmithersStart.gpkg") %>% as("Spatial")
 acost <- accCost(tr1,start)
 plot(acost)
+acost <- acost*0.0007912844
 writeRaster(acost, "TestAcost.tif", "GTiff")
+
+acost2 <- projectRaster(acost, ancDat)
+acost2 <- mask(acost2, alt)
+lays <- stack(ancDat,acost2)
+names(lays) <- layerNames
+s <- sampleRegular(lays , size = 5000000, sp = TRUE) # sample raster
+s <- s[!is.na(s$DAH) & !is.infinite(s$cost),]
+s <- st_as_sf(s)
+
+templhs <- clhs_dist(s,size = 50, minDist = 260, 
+                     maxCost = 1.7, include = NULL, 
+                     cost = "cost", iter = 1000, simple = F,progress = T)
+
+pnts <- templhs$sampled_data
+
+plot(acost2)
+plot(pnts, add = T)
+
+p2 <- st_as_sf(pnts)
+pnts <- pnts[,"DAH"]
+colnames(pnts) <- c("name","geometry")
+st_geometry(pnts) <- "geometry"
+start <- st_as_sfc(start) %>% st_transform(st_crs(pnts))
+startPnts <- st_as_sf(data.frame(name = "Start",geometry = start))
+pnts <- rbind(pnts, startPnts)
+pnts2 <- as(pnts, "Spatial")
+
+## create distance matrix between sample points
+test <- costDistance(tr1,pnts2,pnts2)
+dMat2 <- as.matrix(test)
+dMat2 <- dMat2*0.0007912844*60
+dMat2[is.infinite(dMat2)] <- 1000
+
+##penalty based on quality of points
+objVals <- templhs[["final_obj"]]
+objVals <- max(objVals) - objVals
+
+maxTime <- 8L ##hours
+## time per transect
+plotTime <- 45L ##mins
+minPen <- (maxTime*60L)/2L
+maxPen <- (maxTime*60L)*2L
+objVals <- scales::rescale(objVals, to = c(minPen,maxPen))
+objVals <- as.integer(objVals)
+
+##fixed start, arbitrary end
+
+indStart <- as.integer(rep(50,10))
+##run vehicle routing problem from python script
+## GCS is global span cost coefficient
+vrp <- py_mTSP(dat = dMat2,num_days = 10L, start = indStart, end = indStart, 
+               max_cost = maxTime*60L, plot_time = plotTime, penalty =  objVals, arbDepot = F, GSC = 8L)
+result <- vrp[[1]]
+
+## create spatial paths
+paths <- foreach(j = 0:(length(result)-1), .combine = rbind) %do% {
+  if(length(result[[as.character(j)]]) > 2){
+    cat("Drop site",j,"...\n")
+    p1 <- result[[as.character(j)]]+1
+    out <- foreach(i = 1:(length(p1)-1), .combine = rbind) %do% {
+      temp1 <- pnts[p1[i],]
+      temp2 <- pnts[p1[i+1],]
+      temp3 <- shortestPath(tr1,st_coordinates(temp1),
+                            st_coordinates(temp2),output = "SpatialLines") %>% st_as_sf()
+      temp3$Segment = i
+      temp3
+    }
+    out$DropSite = j
+    out
+  }
+  
+}
+
+paths <- st_transform(paths, 3005)
+st_write(paths, dsn = "RoadTSP.gpkg", layer = "Paths", append = T, driver = "GPKG")  
+
+## label points
+p2 <- pnts
+p2$PID <- seq_along(p2$name)
+p2 <- p2[,"PID"]
+p2$DropLoc <- NA
+p2$Order <- NA
+for(i in 0:(length(result)-1)){
+  p1 <- result[[as.character(i)]]+1
+  p1 <- p1[-1]
+  p2$DropLoc[p1] <- i
+  p2$Order[p1] <- 1:length(p1)
+}
+p2 <- st_transform(p2, 3005)
+st_write(p2, dsn = "RoadTSP.gpkg",layer = "Points", append = T,overwrite = T, driver = "GPKG")
+
+writeLayout <- function(id,filename){
+  vrp <- outStats[[id]][["solution"]]
+  pnts <- outStats[[id]][["points"]]
+  result <- vrp[[1]]
+  
+ 
+  return(TRUE)
+}
+
+
+
+
+
+
+
+
+mat <- matrix(data = c(NA,960,980,NA,1000,1050,0.2,0.2,0.2,NA,980,1000,NA,940,990),nrow = 5,byrow = T)
+r <- raster(mat)
+
+rdIdx <- which(values(r) < 5)
+slpIdx <- which(values(r) > 500)
+rdAdj <- adjacent(r, cells = rdIdx, pairs = T, directions = 8)
+adj <- adjacent(r, cells = slpIdx, pairs = T, directions = 8)
+adj <- adj[!adj[,1] %in% rdIdx ,]
+adj <- adj[!adj[,2] %in% rdIdx ,]
+
+tr <- transition(r,trFn,directions = 8, symm = F)
+tr1 <- geoCorrection(tr)
+tr1[adj] <- (1.5*exp(-3.5*abs(tr1[adj] + 0.1))) ##tobler's hiking function
+tr1[adj] <- 1/0.36
+tr1[rdAdj] <- 1/0.02
+tr1[cbind(rdAdj[,2],rdAdj[,1])] <- 1/0.02
+tr1 <- geoCorrection(tr1)
+acost <- accCost(tr1,fromCoords = c(0.2,0.5))
