@@ -44,7 +44,7 @@ rdsAll <- as.data.table(rdsAll) %>% st_as_sf()
 ##road speed
 rSpd <- fread("road_speed.csv")
 #rSpd[,Values := (1/speed)/40]
-rSpd[,Values := speed]
+rSpd[,Values := speed] ##convert to m/h
 rdsAll <- merge(rdsAll, rSpd, by = "road_surface", all = F)
 rdsAll <- rdsAll[,"Values"]
 rdsAll <- st_buffer(rdsAll,dist = 35, endCapStyle = "SQUARE", joinStyle = "MITRE")
@@ -74,12 +74,14 @@ adj <- adjacent(altAll, cells = slpIdx, pairs = T, directions = 8)
 adj <- adj[!adj[,1] %in% rdIdx ,]
 adj <- adj[!adj[,2] %in% rdIdx ,]
 
-tr <- transition(altAll,trFn,directions = 8, symm = F)
+tr <- transition(altAll,trFn,directions = 8, symm = F) ##altDiff and speed (km/h)
 
-tr1 <- geoCorrection(tr) ##now reciprocal 
-tr1[adj] <- (3/5)*(6*exp(-3.5*abs(tr1[adj] + 0.08))) ##tobler's hiking function * reciprocal of 3/5
+tr1 <- geoCorrection(tr) ##divided by 25 - slope and conductance (km/h/m)
+tr1[adj] <- (3/5)*(6*exp(-3.5*abs(tr1[adj] + 0.08))) ##tobler's hiking function * 3/5 - gives km/h
+tr1 <- tr1*1000 ##now roads are correct conductance (h/m), and walking in m/h
 tr2 <- geoCorrection(tr1) ##have to geocorrect this part again
-tr1[adj] <- tr2[adj]
+tr1[adj] <- tr2[adj] ##tr1 values are now all conductance in h/metre
+
 # tr1[rdAdj] <- 1/0.02
 # tr1[cbind(rdAdj[,2],rdAdj[,1])] <- 1/0.02
 # tr1 <- geoCorrection(tr1)
@@ -87,7 +89,6 @@ tr1[adj] <- tr2[adj]
 start <- st_read("SmithersStart.gpkg") %>% as("Spatial")
 acost <- accCost(tr1,start)
 plot(acost)
-acost <- acost*0.0007912844
 writeRaster(acost, "TestAcost.tif", "GTiff")
 
 acost2 <- projectRaster(acost, ancDat)
@@ -100,7 +101,7 @@ s <- st_as_sf(s)
 
 templhs <- clhs_dist(s,size = 50, minDist = 260, 
                      maxCost = 1.7, include = NULL, 
-                     cost = "cost", iter = 1000, simple = F,progress = T)
+                     cost = "cost", iter = 5000, simple = F,progress = T)
 
 pnts <- templhs$sampled_data
 
@@ -119,7 +120,7 @@ pnts2 <- as(pnts, "Spatial")
 ## create distance matrix between sample points
 test <- costDistance(tr1,pnts2,pnts2)
 dMat2 <- as.matrix(test)
-dMat2 <- dMat2*0.0007912844*60
+dMat2 <- dMat2*60
 dMat2[is.infinite(dMat2)] <- 1000
 
 ##penalty based on quality of points
@@ -180,24 +181,45 @@ for(i in 0:(length(result)-1)){
 p2 <- st_transform(p2, 3005)
 st_write(p2, dsn = "RoadTSP.gpkg",layer = "Points", append = T,overwrite = T, driver = "GPKG")
 
-writeLayout <- function(id,filename){
-  vrp <- outStats[[id]][["solution"]]
-  pnts <- outStats[[id]][["points"]]
-  result <- vrp[[1]]
-  
- 
-  return(TRUE)
+### number of points
+nums <- round(seq(10, 200, length.out = 20))
+nums <- rep(nums, each = 10)
+
+sumKSTest <- function(full,small){
+  out <- 0
+  for(i in 1:ncol(full)){
+    ks <- ks.test(full[,i],small[,i])
+    out <- out+ks$statistic
+  } 
+  return(out)
 }
 
+SLV <- c("twi","valley_depth_2","tca2","swi_area_mod","cov","tpi","demf","norm_height","mrvbf2")
+  
+fullSet <- sampleRegular(ancDat, size = 1000000,useGDAL = T)
+X <- fullSet
+X <- X[complete.cases(X),]
+actSize <- nrow(X)
+test_res <- foreach(n = nums, .combine = rbind, .noexport = c("c_cor","obj_fn"), 
+                    .packages = c("Rcpp","LaplacesDemon","foreach")) %do% {
+                      smallSet <- clhs_fast(X,size = n, iter = 1000, simple = F,progress = T)
+                      smallSet <- as.matrix(smallSet$sampled_data)
+                      res1 <- sumKSTest(X,smallSet)
+                      res2  <- meanKLD(X,smallSet, nb = 20)
+                      data.frame(Num = n, KLyx = res2[1], KLxy = res2[2],KS = res1)
+}
+
+boxplot(KS ~ Num, data = test_res)
+boxplot(KLxy ~ Num, data = test_res)
 
 
 
 
 
 
-
-mat <- matrix(data = c(NA,960,980,NA,1000,1050,0.2,0.2,0.2,NA,980,1000,NA,940,990),nrow = 5,byrow = T)
-r <- raster(mat)
+mat <- matrix(data = c(NA,3,6,NA,5,4,80,80,80,NA,5,5,NA,6,4),nrow = 5,byrow = T)
+r <- crop(alt, extent(alt, 1,5,1,3))
+values(r) <- mat
 
 rdIdx <- which(values(r) < 5)
 slpIdx <- which(values(r) > 500)
@@ -206,7 +228,7 @@ adj <- adjacent(r, cells = slpIdx, pairs = T, directions = 8)
 adj <- adj[!adj[,1] %in% rdIdx ,]
 adj <- adj[!adj[,2] %in% rdIdx ,]
 
-tr <- transition(r,trFn,directions = 8, symm = F)
+tr <- transition(r,function(x){min(x[1],x[2])},directions = 8, symm = F)
 tr1 <- geoCorrection(tr)
 tr1[adj] <- (1.5*exp(-3.5*abs(tr1[adj] + 0.1))) ##tobler's hiking function
 tr1[adj] <- 1/0.36
