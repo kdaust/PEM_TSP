@@ -182,8 +182,28 @@ p2 <- st_transform(p2, 3005)
 st_write(p2, dsn = "RoadTSP.gpkg",layer = "Points", append = T,overwrite = T, driver = "GPKG")
 
 ### number of points
-nums <- round(seq(10, 200, length.out = 20))
-nums <- rep(nums, each = 10)
+
+SLcov <- c("twi.tif","valley_depth_2.tif","tca2.tif","swi_area_mod.tif","cov.tif","tpi.tif")
+covars <- paste(covLoc, SLcov, sep = "/")# ,"DEM_25m.tif"
+layerNames <- c("twi","valley","tca2","swi","cov","tpi") ##need to change this if you change the layers
+ancDat <- raster::stack(covars)
+proj4string(ancDat) <- "+init=epsg:3005"
+
+###theoretical # to fill cov space
+sampledDat <- st_read(paste0(datLocGit,"/transect1_30m_pts_att.gpkg"))
+sampledDat <- sampledDat["mapunit1"]
+temp <- raster::extract(ancDat, sampledDat)
+dat <- data.table(cbind(as.character(sampledDat$mapunit1),temp))
+setnames(dat, old = "V1", new = "Unit")
+dat <- dat[!is.na(Unit),]
+dat2 <- dat[,lapply(.SD, function(x){sd(as.numeric(x), na.rm = T)}),by = .(Unit)]
+dat <- dat[,lapply(.SD, function(x){mean(as.numeric(x), na.rm = T)}),by = .(Unit)]
+dat <- dat[grep("SBSmc2",Unit),]
+dat2 <- dat2[grep("SBSmc2",Unit),]
+##############################33
+
+nums <- round(seq(10, 800, length.out = 15))
+nums <- rep(nums, each = 15)
 
 sumKSTest <- function(full,small){
   out <- 0
@@ -193,15 +213,23 @@ sumKSTest <- function(full,small){
   } 
   return(out)
 }
-
-SLV <- c("twi","valley_depth_2","tca2","swi_area_mod","cov","tpi","demf","norm_height","mrvbf2")
   
 fullSet <- sampleRegular(ancDat, size = 1000000,useGDAL = T)
 X <- fullSet
 X <- X[complete.cases(X),]
 actSize <- nrow(X)
+
+worker.init <- function(){
+  Rcpp::sourceCpp("CppCLHS.cpp")
+}
+
+require(doParallel)
+cl <- makePSOCKcluster(detectCores()-2)
+clusterCall(cl, worker.init)
+registerDoParallel(cl)
+
 test_res <- foreach(n = nums, .combine = rbind, .noexport = c("c_cor","obj_fn"), 
-                    .packages = c("Rcpp","LaplacesDemon","foreach")) %do% {
+                    .packages = c("Rcpp","LaplacesDemon","foreach")) %dopar% {
                       smallSet <- clhs_fast(X,size = n, iter = 1000, simple = F,progress = T)
                       smallSet <- as.matrix(smallSet$sampled_data)
                       res1 <- sumKSTest(X,smallSet)
@@ -211,28 +239,47 @@ test_res <- foreach(n = nums, .combine = rbind, .noexport = c("c_cor","obj_fn"),
 
 boxplot(KS ~ Num, data = test_res)
 boxplot(KLxy ~ Num, data = test_res)
+boxplot(KLyx ~ Num, data = test_res)
+
+temp <- as.data.table(test_res)
+temp <- temp[,.(y = quantile(KS,0.5)), by = .(Num)]
+temp[,y := (y-min(y))/(max(y)-min(y))]
+plot(y ~ Num, data = temp)
+spFun <- splinefun(y = temp$Num, x = temp$y)
+
+x = temp$Num
+y = temp$y
+plot(x, y, xlab="sample number",ylab = "KL Stat")          # Initial plot of the data
+start <- list(k = 1,b1 = 0.05,b0 = 0)
+fit1 <- nls(y ~ k*exp(-b1*x) + b0, start = start)
+lines(x, fitted(fit1), col="red")
+
+xx<- seq(1, 800,1)
+jj <- predict(fit1,list(x=xx))
+
+normalized = (jj-min(jj))/(max(jj)-min(jj))###standardise
+plot(xx,normalized, type = "l")
+approx(x = normalized, y = xx, xout = 0.10)$y###get 90th quantile
 
 
 
 
-
-
-mat <- matrix(data = c(NA,3,6,NA,5,4,80,80,80,NA,5,5,NA,6,4),nrow = 5,byrow = T)
-r <- crop(alt, extent(alt, 1,5,1,3))
-values(r) <- mat
-
-rdIdx <- which(values(r) < 5)
-slpIdx <- which(values(r) > 500)
-rdAdj <- adjacent(r, cells = rdIdx, pairs = T, directions = 8)
-adj <- adjacent(r, cells = slpIdx, pairs = T, directions = 8)
-adj <- adj[!adj[,1] %in% rdIdx ,]
-adj <- adj[!adj[,2] %in% rdIdx ,]
-
-tr <- transition(r,function(x){min(x[1],x[2])},directions = 8, symm = F)
-tr1 <- geoCorrection(tr)
-tr1[adj] <- (1.5*exp(-3.5*abs(tr1[adj] + 0.1))) ##tobler's hiking function
-tr1[adj] <- 1/0.36
-tr1[rdAdj] <- 1/0.02
-tr1[cbind(rdAdj[,2],rdAdj[,1])] <- 1/0.02
-tr1 <- geoCorrection(tr1)
-acost <- accCost(tr1,fromCoords = c(0.2,0.5))
+# mat <- matrix(data = c(NA,3,6,NA,5,4,80,80,80,NA,5,5,NA,6,4),nrow = 5,byrow = T)
+# r <- crop(alt, extent(alt, 1,5,1,3))
+# values(r) <- mat
+# 
+# rdIdx <- which(values(r) < 5)
+# slpIdx <- which(values(r) > 500)
+# rdAdj <- adjacent(r, cells = rdIdx, pairs = T, directions = 8)
+# adj <- adjacent(r, cells = slpIdx, pairs = T, directions = 8)
+# adj <- adj[!adj[,1] %in% rdIdx ,]
+# adj <- adj[!adj[,2] %in% rdIdx ,]
+# 
+# tr <- transition(r,function(x){min(x[1],x[2])},directions = 8, symm = F)
+# tr1 <- geoCorrection(tr)
+# tr1[adj] <- (1.5*exp(-3.5*abs(tr1[adj] + 0.1))) ##tobler's hiking function
+# tr1[adj] <- 1/0.36
+# tr1[rdAdj] <- 1/0.02
+# tr1[cbind(rdAdj[,2],rdAdj[,1])] <- 1/0.02
+# tr1 <- geoCorrection(tr1)
+# acost <- accCost(tr1,fromCoords = c(0.2,0.5))

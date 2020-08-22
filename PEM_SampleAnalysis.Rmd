@@ -7,24 +7,176 @@ output: html_document
 
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE)
+library(clhs)
+library(sf)
+library(raster)
+library(sp)
+library(gdistance)
+library(foreach)
+library(data.table)
+library(fasterize)
+library(reticulate)
+library(here)
 ```
 
-## R Markdown
+```{r source}
+Rcpp::sourceCpp("CppCLHS.cpp")
+source("FastCLHS_R.R")
+source_python("./mTSP.py")
 
-This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
-
-When you click the **Knit** button a document will be generated that includes both content as well as the output of any embedded R code chunks within the document. You can embed an R code chunk like this:
-
-```{r cars}
-summary(cars)
+##Kolmogorov-Smirnov test
+sumKSTest <- function(full,small){
+  out <- 0
+  for(i in 1:ncol(full)){
+    ks <- ks.test(full[,i],small[,i])
+    out <- out+ks$statistic
+  } 
+  return(out)
+}
 ```
 
-## Including Plots
+```{r load data}
+datLocGit <- here("InputData") ## Data
+covLoc <- here("Covariates") ## Too big for git data
 
-You can also embed plots, for example:
+### landscape levels covariates
+covars <- paste(covLoc, c("25m_DAH_3Class.tif","25m_LandformClass_Default_Seive4.tif",
+                          "25m_MRVBF_Classified_IS64Low6Up2.tif","dem.tif"), sep = "/")# ,"DEM_25m.tif"
+layerNamesLL <- c("DAH","LFC","MRVBF","DEM","cost") ##need to change this if you change the layers
+ancDatLL <- raster::stack(covars)
+proj4string(ancDatLL) <- "+init=epsg:3005"
 
-```{r pressure, echo=FALSE}
-plot(pressure)
+## stand level covariates
+SLcov <- c("twi.tif","valley_depth_2.tif","tca2.tif","swi_area_mod.tif","cov.tif","tpi.tif")
+covars <- paste(covLoc, SLcov, sep = "/")
+layerNamesSl <- c("twi","valley","tca2","swi","cov","tpi") ##need to change this if you change the layers
+ancDatSL <- raster::stack(covars)
+proj4string(ancDatSL) <- "+init=epsg:3005"
+
+## dem for transtion layer
+alt <- raster(paste0(covLoc, "/dem.tif"))
+proj4string(alt) <- "+init=epsg:3005"
+
+## template raster
+allRast <- raster(paste0(covLoc,"/Road_Rast_Small.tif"))    
+allRast[allRast == 255] <- NA
+allRast <- trim(allRast)
+
+###read in roads
+rdsAll <- st_read(paste0(datLocGit,"/road_access_for_cost.gpkg"))
+rdsAll <- rdsAll[,"DESCRIPTIO"]
+colnames(rdsAll)[1] <- "road_surface"
+rdsAll <- as.data.table(rdsAll) %>% st_as_sf()
+
+##Smithers start location
+start <- st_read("SmithersStart.gpkg") %>% as("Spatial")
 ```
 
-Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.
+```{r create cost surface}
+##road speed
+rSpd <- fread("road_speed.csv")
+rSpd[,Values := speed]
+rdsAll <- merge(rdsAll, rSpd, by = "road_surface", all = F)
+rdsAll <- rdsAll[,"Values"] %>%
+  st_buffer(dist = 35, endCapStyle = "SQUARE", joinStyle = "MITRE") %>%
+  st_cast("MULTIPOLYGON")
+rdsRast <- fasterize(rdsAll, allRast, field = "Values")
+
+alt2 <- projectRaster(alt,rdsRast,method = 'ngb')
+altAll <- merge(rdsRast, alt2)
+
+## trasition function: if > 500, elevation, so get diff, else speed to select min
+trFn <- function(x){
+  if(x[1] > 500 & x[2] > 500){
+    x[1]-x[2]
+  }else{
+    min(x[1],x[2])
+  }
+}
+
+rdIdx <- which(values(altAll) < 100) ##which cells are for roads?
+slpIdx <- which(values(altAll) > 500)
+adj <- adjacent(altAll, cells = slpIdx, pairs = T, directions = 8)
+adj <- adj[!adj[,1] %in% rdIdx ,] ##remove roads inside area
+adj <- adj[!adj[,2] %in% rdIdx ,]
+
+tr <- transition(altAll,trFn,directions = 8, symm = F) ##altDiff and speed (km/h)
+tr1 <- geoCorrection(tr) ##divided by 25 - slope and conductance (km/h/m)
+tr1[adj] <- (3/5)*(6*exp(-3.5*abs(tr1[adj] + 0.08))) ##tobler's hiking function * 3/5 - gives km/h
+tr1 <- tr1*1000 ##now roads are correct conductance (h/m), and walking in m/h
+tr2 <- geoCorrection(tr1) ##have to geocorrect this part again
+tr1[adj] <- tr2[adj] ##tr1 values are now all conductance in h/metre
+
+acost <- accCost(tr1,start)
+plot(acost)
+writeRaster(acost, "AcostAll.tif", "GTiff")
+```
+
+```{r single point}
+##Mask to regular deception area
+acost2 <- projectRaster(acost, ancDatSL)
+acost2 <- mask(acost2, alt)
+ancDatSL_cost <- stack(ancDatSL,acost2)
+fullSet <- sampleRegular(ancDatSL, size = 1000000,useGDAL = T)
+X <- fullSet
+X <- X[complete.cases(X),]
+
+fullSet <- sampleRegular(ancDatSL_cost, size = 1000000,useGDAL = T)
+Xcost <- fullSet
+Xcost <- Xcost[complete.cases(Xcost),]
+
+createRandom <- function(n){
+  small <- sample(1:nrow(X),size = n, replace = F)
+  return(X[small,])
+}
+
+createLHS <- function(n){
+  temp <- clhs_fast(X,size = n, iter = 1000, simple = F,progress = T)
+  small <- as.matrix(temp$sampled_data)
+  return(small)
+}
+createCCLHS <- function(n){
+  temp <- clhs_fast(X,size = n,cost = ncol(X), iter = 1000, simple = F,progress = T)
+  small <- as.matrix(temp$sampled_data)
+  return(small)
+}
+
+worker.init <- function(){
+  Rcpp::sourceCpp("CppCLHS.cpp")
+}
+
+require(doParallel)
+cl <- makePSOCKcluster(detectCores()-2)
+clusterCall(cl, worker.init)
+registerDoParallel(cl)
+
+collectStats <- function(X,sampleFun,nums,testFun = sumKSTest){
+  test_res <- foreach(n = nums, .combine = rbind, .noexport = c("c_cor","obj_fn"), 
+                    .packages = c("Rcpp","LaplacesDemon","foreach"),
+                    .export = c("clhs_fast","lhs_obj","clhs_dist")) %dopar% {
+                      smallSet <- sampleFun(n)
+                      res1 <- testFun(X[,1:6],smallSet)
+                      data.frame(Num = n,KS = res1)
+                    }
+  return(test_res)
+}
+
+nums <- round(seq(10, 800, length.out = 5))
+nums <- rep(nums, each = 5)
+statsRand <- collectStats(X,createRandom,nums)
+statsLHS <- collectStats(X,createLHS, nums)
+statsCCLHS <- collectStats(Xcost,createCCLHS, nums)
+
+statsCCLHS <- foreach(n = nums, .combine = rbind, .noexport = c("c_cor","obj_fn"), 
+                    .packages = c("Rcpp","LaplacesDemon","foreach"),
+                    .export = c("clhs_fast","lhs_obj","clhs_dist")) %do% {
+                      smallSet <- createCCLHS(n)
+                      res1 <- sumKSTest(Xcost[,1:6],smallSet)
+                      data.frame(Num = n,KS = res1)
+                    }
+
+boxplot(KS ~ Num, data = statsRand)
+boxplot(KS ~ Num, data = statsLHS)
+boxplot(KS ~ Num, data = statsCCLHS)
+```
+

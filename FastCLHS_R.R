@@ -88,6 +88,7 @@ clhs_fast <- function(
     
     # Get cost attribute column 
     cost <- x[ , i_cost, drop = FALSE]
+    cost[is.infinite(cost)] <- 1000
     # Remove cost attribute from attribute table
     x <- x[, -1*i_cost, drop = FALSE]
     
@@ -109,6 +110,7 @@ clhs_fast <- function(
   }
   
   data_continuous <- as.matrix(x)
+  data_continuous <- data_continuous[complete.cases(data_continuous),]
   
   metropolis <- exp(-1*0/temp) # Initial Metropolis value
   n_data <- nrow(data_continuous) # Number of individuals in the data set
