@@ -88,13 +88,15 @@ clhs_fast <- function(
     
     # Get cost attribute column 
     cost <- x[ , i_cost, drop = FALSE]
+    if(any(class(x) == "sf")){cost <- st_drop_geometry(cost)}
+    cost <- cost[,1]
     cost[is.infinite(cost)] <- 1000
     # Remove cost attribute from attribute table
     x <- x[, -1*i_cost, drop = FALSE]
     
     # Si include, cost is 0
     if (!is.null(include)) {
-      cost[include, ] <- 0
+      cost[include] <- 0
     }
     
     # Flags
@@ -109,7 +111,11 @@ clhs_fast <- function(
     }
   }
   
-  data_continuous <- as.matrix(x)
+  if(any(class(x) == "sf")){
+    data_continuous <- as.matrix(st_drop_geometry(x))
+  }else{
+    data_continuous <- as.matrix(x)
+  }
   data_continuous <- data_continuous[complete.cases(data_continuous),]
   
   metropolis <- exp(-1*0/temp) # Initial Metropolis value
@@ -145,7 +151,7 @@ clhs_fast <- function(
   
   if (cost_mode) {
     # (initial) operational cost
-    op_cost <- sum(cost[i_sampled, ])
+    op_cost <- sum(cost[i_sampled])
     # vector storing operational costs
     op_cost_values <- vector(mode = 'numeric', length = iter)
   } else op_cost_values <- NULL
@@ -212,7 +218,7 @@ clhs_fast <- function(
     
     if (cost_mode) {
       # op costs
-      op_cost <- sum(cost[i_sampled, ])
+      op_cost <- sum(cost[i_sampled])
       delta_cost <- op_cost - previous$op_cost
       if (track_mode) metropolis_cost <- Inf # runif(1) >= Inf is always FALSE
       else metropolis_cost <- exp(-1*delta_cost/temp)
@@ -262,7 +268,7 @@ clhs_fast <- function(
   # Close progress bar
   if (progress) close(pb)
   
-  sampled_data <- data_continuous_sampled
+  sampled_data <- x[i_sampled,]
   
   # Simple output - just the sampled object
   if (simple) res <- i_sampled
