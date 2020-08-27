@@ -279,7 +279,8 @@ clhs_fast <- function(
       index_samples = i_sampled, 
       sampled_data = sampled_data, 
       obj = obj_values,
-      cost = op_cost_values
+      cost = op_cost_values,
+      final_obj = delta_obj_continuous[1:(size - length(include))]
     )
     class(res) = c("cLHS_fast","list")
   }

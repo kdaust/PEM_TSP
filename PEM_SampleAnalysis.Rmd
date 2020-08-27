@@ -268,8 +268,7 @@ createCCLHS <- function(X,n,ancDat){
 }
 
 createTSP <- function(X,n,ancDat){
-  templhs <- clhs_dist(X,size = n, minDist = 260, 
-                     maxCost = 1.7, include = NULL, 
+  templhs <- clhs_fast(X,size = n, include = NULL, 
                      cost = "layer", iter = 1000, simple = F,progress = T)
 
   pnts <- templhs$sampled_data
@@ -278,7 +277,6 @@ createTSP <- function(X,n,ancDat){
   pnts <- pnts[,1]
   colnames(pnts) <- c("name","geometry")
   st_geometry(pnts) <- "geometry"
-  start <- st_as_sfc(start) %>% st_transform(st_crs(pnts))
   startPnts <- st_as_sf(data.frame(name = "Start",geometry = start))
   pnts <- rbind(pnts, startPnts)
   pnts2 <- as(pnts, "Spatial")
@@ -308,7 +306,22 @@ createTSP <- function(X,n,ancDat){
   vrp <- py_mTSP(dat = dMat2,num_days = ndays, start = indStart, end = indStart, 
                  max_cost = maxTime*60L, plot_time = plotTime, penalty =  objVals, arbDepot = F, GSC = 5L)
   result <- vrp[[1]]
-
+  idxs <- as.numeric(unlist(result))
+  idxs <- idxs[idxs != n]
+  idxs <- idxs+1
+  
+  dat <- pnts[idxs,]
+  small <- foreach(j = 1:nrow(dat),.combine = rbind) %do% {
+    tri <- Tri_build(id = j, x = st_coordinates(dat[j,])[1],y = st_coordinates(dat[j,])[2])
+    tPs <- st_sample(tri, size = 15, type = "regular")
+    temp <- st_sf(data.frame(id = j, geometry = tPs)) %>%
+      st_cast("POINT")
+    temp
+    
+  }
+  temp <- raster::extract(ancDat, small)
+  temp <- temp[!is.na(temp[1,]),]
+  return(temp)
 }
 
 worker.init <- function(){
@@ -332,8 +345,8 @@ collectStats <- function(X,sampleFun,nums,testFun1 = sumKSTest,testFun2 = fillTe
   return(test_res)
 }
 
-nums <- round(seq(5, 80, length.out = 15))
-nums <- rep(nums, each = 5)
+nums <- round(seq(5, 500, length.out = 20))
+nums <- rep(nums, each = 10)
 statsLHS_trans <- collectStats(X,createLHS,nums,ancDat = ancDatSL)
 boxplot(KS ~ Num, data = statsLHS_trans)
 boxplot(fillQual ~ Num, data = statsLHS_trans)
