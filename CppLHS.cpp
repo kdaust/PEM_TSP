@@ -277,6 +277,7 @@ List CppLHS(NumericMatrix x, NumericVector cost, NumericMatrix strata, int nsamp
   }
   arm_isamp = arma::conv_to<arma::uvec>::from(i_sampled);
   x_curr = xA.rows(arm_isamp);
+  Rcout << "vroom vroom \n";
   return List::create(_["sampled_data"] = x_curr,
                       _["obj"] = obj_values,
                       _["final_obj"] = delta_cont);

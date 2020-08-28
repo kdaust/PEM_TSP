@@ -156,12 +156,15 @@ fullSet <- sampleRegular(ancDatSL_cost, size = 100000,useGDAL = T)
 Xcost <- fullSet
 Xcost <- Xcost[complete.cases(Xcost),]
 
-costVec = Xcost[,7]
-costVec[is.infinite(costVec)] <- 1000
-Xcost <- Xcost[,-7]
-size = 50
+templhs <- c_clhs(x = Xcost, size = 100, i_cost = 7, iter = 10000)
+tic()
+testing <- CppLHS(Xcost, costVec, continuous_strata, size, T, iter = 10000)
+toc()
 
-
+Xcost[,7][is.infinite(Xcost[,7])] <- 1000
+tic()
+test2 <- clhs(x = as.data.frame(Xcost),size = size,cost = 'layer', simple = F)
+toc()
 
 createRandom <- function(n){
   small <- sample(1:nrow(X),size = n, replace = F)
