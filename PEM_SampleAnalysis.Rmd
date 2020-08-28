@@ -152,7 +152,7 @@ fullSet <- sampleRegular(ancDatSL, size = 1000000,useGDAL = T)
 X <- fullSet
 X <- X[complete.cases(X),]
 
-fullSet <- sampleRegular(ancDatSL_cost, size = 1000000,useGDAL = T)
+fullSet <- sampleRegular(ancDatSL_cost, size = 100000,useGDAL = T)
 Xcost <- fullSet
 Xcost <- Xcost[complete.cases(Xcost),]
 

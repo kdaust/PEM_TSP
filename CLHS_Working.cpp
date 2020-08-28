@@ -4,6 +4,7 @@
 #include <math.h>
 #include <string.h>
 #include <RcppArmadillo.h>
+//[[Rcpp::depends(RcppArmadillo)]]
 
 using namespace Rcpp;
 using namespace std;
@@ -103,14 +104,13 @@ IntegerVector hist(NumericVector x, NumericVector breaks){ //based on C_bincount
   }
 
 struct objResult {
-  int objRes;
-  NumericVector obj_cont_res;
+  double objRes;
+  std::vector<double> obj_cont_res;
 };
 
 //objective function
-// [[Rcpp::export]]
-objResult obj_fn(mat x, NumericMatrix strata, NumericMatrix cor_full, int eta = 1){
-  int num_vars = x.ncol();
+objResult obj_fn(arma::mat x, NumericMatrix strata, NumericMatrix cor_full, int eta = 1){
+  int num_vars = x.n_cols;
   int num_obs = strata.nrow();
   NumericVector hist_cnt;
   IntegerMatrix hist_out(num_obs, num_vars);
@@ -119,9 +119,10 @@ objResult obj_fn(mat x, NumericMatrix strata, NumericMatrix cor_full, int eta = 
   NumericVector hist_temp;
   NumericVector obj_cont;
   NumericMatrix t2;
+  std::vector<double> obj_cont2;
   
   for(int i = 0; i < num_vars; i++){
-    data = x(_,i);
+    data = wrap(x.col(i));
     strata_curr = strata(_,i);
     hist_out(_,i) = hist(data,strata_curr);
   }
@@ -130,24 +131,47 @@ objResult obj_fn(mat x, NumericMatrix strata, NumericMatrix cor_full, int eta = 
   temp.attr("dim") = Dimension(num_obs,num_vars);
   t2 = as<NumericMatrix>(temp);
   obj_cont = rowSums(t2);
+  obj_cont2 = as<std::vector<double>>(obj_cont);
   //Rcout << "Vectout : " << obj_cont << "\n";
-  NumericMatrix cor_new = c_cor(x);
+  NumericMatrix cor_new = c_cor(wrap(x));
   double obj_cor = sum(abs(cor_full - cor_new));
   double objFinal = sum(obj_cont) + obj_cor*2;
-  struct objRes out = {objFinal, obj_cont};
+  struct objResult out = {objFinal, obj_cont2};
   return(out);
 }
 
 
 //Main Function
+/*
+List testFn(NumericMatrix x, int ndata, int nsample,NumericMatrix strata){
+  arma::mat x_curr;
+  arma::mat xA = as<arma::mat>(x);
+  NumericMatrix cor_mat = c_cor(x);
+  
+  std::vector<int> i_sampled;
+  std::vector<int> i_unsampled;
+  std::vector<int> idx(ndata);
+  std::iota(idx.begin(),idx.end(),0);
+  
+  i_sampled = as<std::vector<int>>(Rcpp::sample(ndata,nsample,false));
+  i_unsampled = vector_diff(idx,i_sampled);
+  arma::uvec aisamp = arma::conv_to<arma::uvec>::from(i_sampled);
+  x_curr = xA.rows(aisamp); // is this efficient?
+  struct objResult res = obj_fn(x_curr,strata,cor_mat); //test this
+  return List::create(_["new"] = x_curr,
+                      _["old"] = x);
+}
+*/
+
 // [[Rcpp::export]]
-//[[Rcpp::depends(RcppArmadillo)]]
-List CppLHS(NumericMatrix x, int ndata, int nsample, bool cost_mode, int iter, 
-                        double temperature, NumericVector cost, NumericMatrix strata, NumericMatrix cor_full){
+List CppLHS(NumericMatrix x, NumericVector cost, NumericMatrix strata, int nsample, bool cost_mode, int iter, 
+                        double temperature = 1, double tdecrease = 0.95, int length_cycle = 8){
+  
+  int ndata = x.nrow();
   double prev_obj;
   double obj;
   double delta_obj;
-  double metropolis;
+  double metropolis = 1.0;
   double prev_opCost;
   double opCost;
   double metropolis_cost;
@@ -176,8 +200,10 @@ List CppLHS(NumericMatrix x, int ndata, int nsample, bool cost_mode, int iter,
   
   i_sampled = as<std::vector<int>>(Rcpp::sample(ndata,nsample,false));
   i_unsampled = vector_diff(idx,i_sampled);
-  x_curr = xA.rows(as<arma::uvec>(i_sampled)); // is this efficient?
-  struct objRes res = obj_fun(x_curr,strata,cor_full); //test this
+  arma::uvec arm_isamp = arma::conv_to<arma::uvec>::from(i_sampled);
+  x_curr = xA.rows(arm_isamp); // is this efficient?
+  NumericMatrix cor_full = c_cor(x);
+  struct objResult res = obj_fn(x_curr,strata,cor_full);
   obj = res.objRes;
   delta_cont = res.obj_cont_res;
   
@@ -190,6 +216,8 @@ List CppLHS(NumericMatrix x, int ndata, int nsample, bool cost_mode, int iter,
   NumericVector obj_values(iter);
   
   for(int i = 0; i < iter; i++){
+    if(i % 5==0)
+      Rcpp::checkUserInterrupt();
     prev_obj = obj;
     i_sampled_prev = i_sampled;
     i_unsampled_prev = i_unsampled;
@@ -218,8 +246,9 @@ List CppLHS(NumericMatrix x, int ndata, int nsample, bool cost_mode, int iter,
       i_unsampled.push_back(spl_removed);
       //ready for data
     }
-    x_curr = xA.rows(as<arma::uvec>(i_sampled)); // is this efficient?
-    struct objRes res = obj_fun(x_curr,strata,cor_full); //test this
+    arm_isamp = arma::conv_to<arma::uvec>::from(i_sampled);
+    x_curr = xA.rows(arm_isamp); // is this efficient?
+    struct objResult res = obj_fn(x_curr,strata,cor_full); //test this
     obj = res.objRes;
     delta_cont = res.obj_cont_res;
     //update variables
@@ -247,14 +276,14 @@ List CppLHS(NumericMatrix x, int ndata, int nsample, bool cost_mode, int iter,
       }
     }
     obj_values[i] = obj;
-    if(i % length.cycle == 0){
+    if(i % length_cycle == 0){
       temperature = temperature*tdecrease;
     }
   }
-  x_curr = xA.rows(as<arma::uvec>(i_sampled));
+  arm_isamp = arma::conv_to<arma::uvec>::from(i_sampled);
+  x_curr = xA.rows(arm_isamp);
   return List::create(_["sampled_data"] = x_curr,
                       _["obj"] = obj_values,
                       _["final_obj"] = delta_cont);
 }
-
 
