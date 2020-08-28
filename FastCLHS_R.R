@@ -1,10 +1,24 @@
-  # df <- data.frame(
-#   a = runif(1000000),
-#   b = rnorm(1000000),
-#   c = rexp(1000000)*4,
-#   d = rgamma(1000000, shape = 2)
-# )
-# size = 100
+nsamp = 100000
+df <- data.frame(
+  a = runif(nsamp),
+  b = rnorm(nsamp),
+  c = rexp(nsamp)*4,
+  d = rgamma(nsamp, shape = 2)
+)
+size = 20
+cost = runif(nsamp, min = 0, max = 5)
+continuous_strata <- apply(
+  df, 
+  2, 
+  function(x) {
+    quantile(x, probs = seq(0, 1, length.out = size + 1), na.rm = TRUE)
+  }
+)
+
+testFn(as.matrix(df), cost, continuous_strata, size, T, 10)
+
+
+testing <- CppLHS(as.matrix(df), cost, continuous_strata, size, T, iter = 10000)
 # 
 # system.time(clhs_fast(df,size, iter = 1000))
 # system.time(clhs(df,size, iter = 1000

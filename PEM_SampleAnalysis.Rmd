@@ -156,6 +156,13 @@ fullSet <- sampleRegular(ancDatSL_cost, size = 100000,useGDAL = T)
 Xcost <- fullSet
 Xcost <- Xcost[complete.cases(Xcost),]
 
+costVec = Xcost[,7]
+costVec[is.infinite(costVec)] <- 1000
+Xcost <- Xcost[,-7]
+size = 50
+
+
+
 createRandom <- function(n){
   small <- sample(1:nrow(X),size = n, replace = F)
   return(X[small,])
@@ -345,8 +352,8 @@ collectStats <- function(X,sampleFun,nums,testFun1 = sumKSTest,testFun2 = fillTe
   return(test_res)
 }
 
-nums <- round(seq(5, 500, length.out = 20))
-nums <- rep(nums, each = 10)
+nums <- round(seq(5, 1000, length.out = 50))
+nums <- rep(nums, each = 15)
 statsLHS_trans <- collectStats(X,createLHS,nums,ancDat = ancDatSL)
 boxplot(KS ~ Num, data = statsLHS_trans)
 boxplot(fillQual ~ Num, data = statsLHS_trans)
