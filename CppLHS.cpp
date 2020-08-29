@@ -53,6 +53,7 @@ inline asset_info compute_asset_info(const NumericMatrix& mat,
 inline NumericMatrix c_cor_helper(const NumericMatrix& mat, const int rstart, const int rend) {
   int nc = mat.ncol();
   int nperiod = rend - rstart;
+  double tempCor;
   NumericMatrix rmat(nc, nc);
   
   vector<asset_info> info(nc);
@@ -66,7 +67,11 @@ inline NumericMatrix c_cor_helper(const NumericMatrix& mat, const int rstart, co
       for (int r = rstart; r < rend; r++)
         sXY += mat(r, c1) * mat(r, c2);
       
-      rmat(c1, c2) = (nperiod * sXY - info[c1].sum * info[c2].sum) / (info[c1].stdev * info[c2].stdev);
+      tempCor = (nperiod * sXY - info[c1].sum * info[c2].sum) / (info[c1].stdev * info[c2].stdev);
+      if(isnan(tempCor)){
+        tempCor = 0;
+      }
+      rmat(c1, c2) = tempCor;
     }
   }
   
@@ -141,6 +146,7 @@ objResult obj_fn(arma::mat x, NumericMatrix strata, NumericMatrix cor_full, int 
   obj_cont2 = as<std::vector<double>>(obj_cont);
   //Rcout << "RowSums : " << obj_cont << "\n";
   NumericMatrix cor_new = c_cor(wrap(x));
+  //Rcout << "cormat " << cor_new << "\n";
   double obj_cor = sum(abs(cor_full - cor_new));
   double objFinal = sum(obj_cont) + obj_cor*2;
   struct objResult out = {objFinal, obj_cont2};
@@ -181,16 +187,19 @@ List CppLHS(NumericMatrix x, NumericVector cost, NumericMatrix strata, int nsamp
   std::vector<int> i_unsampled_prev;
   std::vector<int> idx(ndata);
   std::iota(idx.begin(),idx.end(),0);
+  std::vector<double>::iterator it_worse;
   int i_worse;
+  
   IntegerVector idx2;
   NumericVector temp;
   
-  i_sampled = as<std::vector<int>>(Rcpp::sample(ndata,nsample,false));
+  i_sampled = as<std::vector<int>>(Rcpp::sample(ndata-1,nsample,false));
   i_unsampled = vector_diff(idx,i_sampled);
   arma::uvec arm_isamp = arma::conv_to<arma::uvec>::from(i_sampled);
   x_curr = xA.rows(arm_isamp); // is this efficient?
   //Rcout << "Finish initial sample \n";
   NumericMatrix cor_full = c_cor(x);
+  //Rcout << "cormat " << cor_full << "\n";
   struct objResult res = obj_fn(x_curr,strata,cor_full);
   obj = res.objRes;
   delta_cont = res.obj_cont_res;
@@ -206,7 +215,7 @@ List CppLHS(NumericMatrix x, NumericVector cost, NumericMatrix strata, int nsamp
   
   for(int i = 0; i < iter; i++){
     //Rcout << i << " ";
-    if(i % 50 ==0)
+    if(i % 50 == 0)
       Rcpp::checkUserInterrupt();
     prev_obj = obj;
     i_sampled_prev = i_sampled;
@@ -229,8 +238,10 @@ List CppLHS(NumericMatrix x, NumericVector cost, NumericMatrix strata, int nsamp
       //now ready for data
     }else{
       //Rcout << "In remove worst \n";
-      i_worse = *std::max_element(delta_cont.begin(),delta_cont.end());
+      it_worse = std::max_element(delta_cont.begin(),delta_cont.end());
+      i_worse = std::distance(delta_cont.begin(), it_worse);
       spl_removed = i_sampled[i_worse];
+      //Rcout << "spl_removed " << spl_removed << "\n";
       idx_added = as<std::vector<int>>(Rcpp::sample(i_unsampled.size()-1, 1, false));
       i_sampled.erase(i_sampled.begin()+i_worse);
       i_sampled.push_back(i_unsampled[idx_added[0]]);
@@ -244,7 +255,8 @@ List CppLHS(NumericMatrix x, NumericVector cost, NumericMatrix strata, int nsamp
     res = obj_fn(x_curr,strata,cor_full); //test this
     obj = res.objRes;
     delta_cont = res.obj_cont_res;
-    //Rcout << "New delta obj cont is " << obj << "\n";
+    NumericVector dcTemp = wrap(delta_cont);
+    //Rcout << "New delta obj cont is " << dcTemp << "\n";
     //update variables
     delta_obj = obj - prev_obj;
     metropolis = exp(-1*delta_obj/temperature);
@@ -279,6 +291,7 @@ List CppLHS(NumericMatrix x, NumericVector cost, NumericMatrix strata, int nsamp
   x_curr = xA.rows(arm_isamp);
   Rcout << "vroom vroom \n";
   return List::create(_["sampled_data"] = x_curr,
+                      _["indeces"] = i_sampled,
                       _["obj"] = obj_values,
                       _["final_obj"] = delta_cont);
 }

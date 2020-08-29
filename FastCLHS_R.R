@@ -25,7 +25,10 @@
 
 library(Rcpp)
 Rcpp::sourceCpp('./CppLHS.cpp')
-
+# xMat <- as.matrix(st_drop_geometry(X))
+# x = xMat
+# size = 10
+# i_cost = NULL
 ##wrapper for Cpp function
 c_clhs <- function(
   x, # matrix
@@ -37,9 +40,15 @@ c_clhs <- function(
   eta = 1,
   length.cycle = 8 # Number of cycles done at each constant temperature value
 ){
-  costVec = x[,i_cost]
-  costVec[is.infinite(costVec)] <- 1000
-  x <- x[,-i_cost]
+  if(is.null(i_cost)){
+    costVec <- rep(0,5)
+    costFlag <- F
+  }else{
+    costVec = x[,i_cost]
+    costVec[is.infinite(costVec)] <- 1000
+    x <- x[,-i_cost]
+    costFlag = T
+  }
   
   continuous_strata <- apply(
     x, 
@@ -48,7 +57,9 @@ c_clhs <- function(
       quantile(x, probs = seq(0, 1, length.out = size + 1), na.rm = TRUE)
     }
   )
-  out <- CppLHS(x, costVec, continuous_strata, size, T, iter = iter)
+  out <- CppLHS(x, cost = costVec, strata = continuous_strata, 
+                nsample = size, cost_mode = costFlag, iter = 5000)
+  out$indeces <- out$indeces + 1 ##fix indexing difference
   return(out)
 }
   

@@ -22,7 +22,6 @@ library(tidyverse)
 ```
 
 ```{r source}
-Rcpp::sourceCpp("CppCLHS.cpp")
 source("FastCLHS_R.R")
 source_python("./mTSP.py")
 
@@ -30,7 +29,7 @@ source_python("./mTSP.py")
 sumKSTest <- function(full,small){
   out <- 0
   for(i in 1:ncol(full)){
-    ks <- ks.test(full[,i],small[,i])
+    ks <- suppressWarnings(ks.test(full[,i],small[,i]))
     out <- out+ks$statistic
   } 
   return(out)
@@ -148,7 +147,7 @@ ancDatSL_cost <- stack(ancDatSL,acost2)
 ```
 
 ```{r single point}
-fullSet <- sampleRegular(ancDatSL, size = 1000000,useGDAL = T)
+fullSet <- sampleRegular(ancDatSL, size = 100000,useGDAL = T)
 X <- fullSet
 X <- X[complete.cases(X),]
 
@@ -156,34 +155,26 @@ fullSet <- sampleRegular(ancDatSL_cost, size = 100000,useGDAL = T)
 Xcost <- fullSet
 Xcost <- Xcost[complete.cases(Xcost),]
 
-templhs <- c_clhs(x = Xcost, size = 100, i_cost = 7, iter = 10000)
-tic()
-testing <- CppLHS(Xcost, costVec, continuous_strata, size, T, iter = 10000)
-toc()
+templhs <- c_clhs(x = X, size = 100, i_cost = NULL, iter = 10000)
 
-Xcost[,7][is.infinite(Xcost[,7])] <- 1000
-tic()
-test2 <- clhs(x = as.data.frame(Xcost),size = size,cost = 'layer', simple = F)
-toc()
-
-createRandom <- function(n){
+createRandom <- function(X,n){
   small <- sample(1:nrow(X),size = n, replace = F)
   return(X[small,])
 }
 
-createLHS <- function(n){
-  temp <- clhs_fast(X,size = n, iter = 1000, simple = F,progress = T)
+createLHS <- function(X,n){
+  temp <- c_clhs(X,size = n, i_cost = NULL, iter = 10000)
   small <- as.matrix(temp$sampled_data)
   return(small)
 }
-createCCLHS <- function(n){
-  temp <- clhs_fast(X,size = n,cost = ncol(X), iter = 1000, simple = F,progress = T)
+createCCLHS <- function(X,n){
+  temp <- c_clhs(X,size = n,i_cost = ncol(X), iter = 5000)
   small <- as.matrix(temp$sampled_data)
   return(small)
 }
 
 worker.init <- function(){
-  Rcpp::sourceCpp("CppCLHS.cpp")
+  Rcpp::sourceCpp("CppLHS.cpp")
 }
 
 require(doParallel)
@@ -191,13 +182,14 @@ cl <- makePSOCKcluster(detectCores()-2)
 clusterCall(cl, worker.init)
 registerDoParallel(cl)
 
-collectStats <- function(X,sampleFun,nums,testFun = sumKSTest){
+collectStats <- function(X,sampleFun,nums,testFun1 = sumKSTest,testFun2 = fillTest){
   test_res <- foreach(n = nums, .combine = rbind, .noexport = c("c_cor","obj_fn"), 
                     .packages = c("Rcpp","LaplacesDemon","foreach"),
-                    .export = c("clhs_fast","lhs_obj","clhs_dist")) %dopar% {
-                      smallSet <- sampleFun(n)
-                      res1 <- testFun(X[,1:6],smallSet)
-                      data.frame(Num = n,KS = res1)
+                    .export = c("clhs_fast","lhs_obj","clhs_dist")) %do% {
+                      smallSet <- sampleFun(X,n)
+                      res1 <- testFun1(X[,1:6],smallSet)
+                      res2 <- testFun2(X[,1:6], smallSet)
+                      data.frame(Num = n,KS = res1, fill = res2)
                     }
   return(test_res)
 }
@@ -217,7 +209,7 @@ statsAll$SType <- as.factor(statsAll$SType)
 
 ggplot(statsAll, aes(x = Num, y = KS, fill = SType))+
   geom_boxplot()
-ggplot(statsFill, aes(x = Num, y = KS, fill = SType))+
+ggplot(statsAll, aes(x = Num, y = fill, fill = SType))+
   geom_boxplot()
 
 boxplot(KS + SType ~ Num, data = statsAll)
@@ -235,19 +227,20 @@ ggplot(statsAll, aes(x = Num, y = Norm, fill = SType))+
 
 ```{r transects}
 ancDatLL_cost <- stack(ancDatLL,acost2)
-fullSet <- sampleRegular(ancDatLL, size = 1000000,sp = T)
+fullSet <- sampleRegular(ancDatLL, size = 100000,sp = T)
 X <- st_as_sf(fullSet)
 X <- X[!is.na(X$X25m_DAH_3Class),]
 full <- as.matrix(st_drop_geometry(X))
 
-fullSet <- sampleRegular(ancDatLL_cost, size = 1000000,sp = T)
+fullSet <- sampleRegular(ancDatLL_cost, size = 100000,sp = T)
 Xcost <- st_as_sf(fullSet)
 Xcost <- Xcost[!is.na(Xcost$X25m_DAH_3Class),]
 Xcost <- Xcost[!is.infinite(Xcost$layer),]
 
 createLHS <- function(X,n,ancDat){
-  temp <- clhs_fast(X,size = n, iter = 1000, simple = F,progress = T)
-  dat <- temp$sampled_data
+  xMat <- as.matrix(st_drop_geometry(X))
+  temp <- c_clhs(xMat,size = n,i_cost = NULL,iter = 5000)
+  dat <- X[temp$indeces,]
   small <- foreach(j = 1:nrow(dat),.combine = rbind) %do% {
     tri <- Tri_build(id = j, x = st_coordinates(dat[j,])[1],y = st_coordinates(dat[j,])[2])
     tPs <- st_sample(tri, size = 15, type = "regular")
