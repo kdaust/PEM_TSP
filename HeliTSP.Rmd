@@ -36,7 +36,7 @@ source_python("./mTSP.py")
 Set aoi to ESSFmc or ESSFmcw depending on interest.
 
 ```{r data}
-aoi <- "ESSFmcw"
+aoi <- "ESSFmc"
 datLocGit <- here("InputData") ## Data
 covLoc <- here("Covariates") ## Too big for git data
 ### landscape levels covariates
@@ -293,6 +293,6 @@ writeLayout <- function(id,filename){
 
 ## write gpkgs for each full route
 for(x in 1:length(ids)){
-  writeLayout(id = ids[x], filename = paste0("ESSFnew_",x,".gpkg"))
+  writeLayout(id = ids[x], filename = paste0("ESSFmc_",x,".gpkg"))
 }
 ```
