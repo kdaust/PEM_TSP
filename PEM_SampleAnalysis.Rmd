@@ -19,6 +19,7 @@ library(reticulate)
 library(here)
 library(LearnGeom)
 library(tidyverse)
+library(goftest)
 ```
 
 ```{r source}
@@ -32,6 +33,16 @@ sumKSTest <- function(full,small){
     ks <- suppressWarnings(ks.test(full[,i],small[,i]))
     out <- out+ks$statistic
   } 
+  return(out)
+}
+
+adTest <- function(full,small){
+  out <- 0
+  for(i in 1:ncol(full)){
+    fn <- ecdf(full[,i])
+    temp <- ad.test(small[,i], null = fn)
+    out <- out + temp$statistic
+  }
   return(out)
 }
 
@@ -100,7 +111,8 @@ colnames(rdsAll)[1] <- "road_surface"
 rdsAll <- as.data.table(rdsAll) %>% st_as_sf()
 
 ##Smithers start location
-start <- st_read("SmithersStart.gpkg") %>% as("Spatial")
+start_sf <- st_read("SmithersStart.gpkg")
+start <- as(start_sf, "Spatial")
 ```
 
 ```{r create cost surface}
@@ -147,15 +159,15 @@ ancDatSL_cost <- stack(ancDatSL,acost2)
 ```
 
 ```{r single point}
-fullSet <- sampleRegular(ancDatSL, size = 100000,useGDAL = T)
+fullSet <- sampleRegular(ancDatSL, size = 1000000,useGDAL = T)
 X <- fullSet
 X <- X[complete.cases(X),]
 
-fullSet <- sampleRegular(ancDatSL_cost, size = 100000,useGDAL = T)
+fullSet <- sampleRegular(ancDatSL_cost, size = 1000000,useGDAL = T)
 Xcost <- fullSet
 Xcost <- Xcost[complete.cases(Xcost),]
 
-templhs <- c_clhs(x = X, size = 100, i_cost = NULL, iter = 10000)
+##templhs <- c_clhs(x = X, size = 100, i_cost = NULL, iter = 10000)
 
 createRandom <- function(X,n){
   small <- sample(1:nrow(X),size = n, replace = F)
@@ -163,12 +175,12 @@ createRandom <- function(X,n){
 }
 
 createLHS <- function(X,n){
-  temp <- c_clhs(X,size = n, i_cost = NULL, iter = 10000)
+  temp <- c_clhs(X,size = n, i_cost = NULL, iter = 5000)
   small <- as.matrix(temp$sampled_data)
   return(small)
 }
 createCCLHS <- function(X,n){
-  temp <- c_clhs(X,size = n,i_cost = ncol(X), iter = 5000)
+  temp <- c_clhs(X,size = n,i_cost = ncol(X), iter = 1000)
   small <- as.matrix(temp$sampled_data)
   return(small)
 }
@@ -182,19 +194,20 @@ cl <- makePSOCKcluster(detectCores()-2)
 clusterCall(cl, worker.init)
 registerDoParallel(cl)
 
-collectStats <- function(X,sampleFun,nums,testFun1 = sumKSTest,testFun2 = fillTest){
-  test_res <- foreach(n = nums, .combine = rbind, .noexport = c("c_cor","obj_fn"), 
-                    .packages = c("Rcpp","LaplacesDemon","foreach"),
-                    .export = c("clhs_fast","lhs_obj","clhs_dist")) %do% {
+collectStats <- function(X,sampleFun,nums,testFun1 = sumKSTest,testFun2 = fillTest, testFun3 = adTest){
+  test_res <- foreach(n = nums, .combine = rbind, .noexport = c("CppLHS"), 
+                    .packages = c("Rcpp","LaplacesDemon","foreach","goftest"),
+                    .export = c("c_clhs")) %dopar% {
                       smallSet <- sampleFun(X,n)
                       res1 <- testFun1(X[,1:6],smallSet)
                       res2 <- testFun2(X[,1:6], smallSet)
+                      #res3 <- testFun3(X[,1:6], smallSet)
                       data.frame(Num = n,KS = res1, fill = res2)
                     }
   return(test_res)
 }
 
-nums <- round(seq(10, 800, length.out = 10))
+nums <- round(seq(10, 800, length.out = 20))
 nums <- rep(nums, each = 5)
 statsRand <- collectStats(X,createRandom,nums)
 statsRand$SType <- "Random"
@@ -212,13 +225,7 @@ ggplot(statsAll, aes(x = Num, y = KS, fill = SType))+
 ggplot(statsAll, aes(x = Num, y = fill, fill = SType))+
   geom_boxplot()
 
-boxplot(KS + SType ~ Num, data = statsAll)
-boxplot(KS ~ Num, data = statsRand)
-boxplot(KS ~ Num, data = statsLHS)
-boxplot(KS ~ Num, data = statsCCLHS)
-
-
-statsAll <- as.data.table(statsFill)
+statsAll <- as.data.table(statsAll)
 statsAll[, Norm := (KS-min(KS))/(max(KS)-min(KS))]
 statsAll[,Norm := 1-Norm]
 ggplot(statsAll, aes(x = Num, y = Norm, fill = SType))+
@@ -230,7 +237,8 @@ ancDatLL_cost <- stack(ancDatLL,acost2)
 fullSet <- sampleRegular(ancDatLL, size = 100000,sp = T)
 X <- st_as_sf(fullSet)
 X <- X[!is.na(X$X25m_DAH_3Class),]
-full <- as.matrix(st_drop_geometry(X))
+fullSL <- sampleRegular(ancDatSL, size = 1000000,GDAL = T)
+fullSL <- fullSL[complete.cases(fullSL),]
 
 fullSet <- sampleRegular(ancDatLL_cost, size = 100000,sp = T)
 Xcost <- st_as_sf(fullSet)
@@ -244,43 +252,45 @@ createLHS <- function(X,n,ancDat){
   small <- foreach(j = 1:nrow(dat),.combine = rbind) %do% {
     tri <- Tri_build(id = j, x = st_coordinates(dat[j,])[1],y = st_coordinates(dat[j,])[2])
     tPs <- st_sample(tri, size = 15, type = "regular")
-    temp <- st_sf(data.frame(id = j, geometry = tPs)) %>%
-      st_cast("POINT")
+    temp <- suppressWarnings(st_sf(data.frame(id = j, geometry = tPs)) %>%
+       st_cast("POINT"))
     temp
     
   }
-  temp <- raster::extract(ancDat, small)
+  temp <- suppressWarnings(raster::extract(ancDat, small))
   temp <- temp[!is.na(temp[1,]),]
   return(temp)
 }
 
 createCCLHS <- function(X,n,ancDat){
-  temp <- clhs_fast(X,size = n,cost = 'layer', iter = 1000, simple = F,progress = T)
-  dat <- temp$sampled_data
+  xMat <- as.matrix(st_drop_geometry(X))
+  temp <- c_clhs(xMat,size = n,i_cost = ncol(xMat),iter = 5000)
+  dat <- X[temp$indeces,]
   small <- foreach(j = 1:nrow(dat),.combine = rbind) %do% {
     tri <- Tri_build(id = j, x = st_coordinates(dat[j,])[1],y = st_coordinates(dat[j,])[2])
     tPs <- st_sample(tri, size = 15, type = "regular")
-    temp <- st_sf(data.frame(id = j, geometry = tPs)) %>%
-      st_cast("POINT")
+    temp <- suppressWarnings(st_sf(data.frame(id = j, geometry = tPs)) %>%
+       st_cast("POINT"))
     temp
     
   }
-  temp <- raster::extract(ancDat, small)
+  temp <- suppressWarnings(raster::extract(ancDat, small))
   temp <- temp[!is.na(temp[1,]),]
   return(temp)
 }
 
 createTSP <- function(X,n,ancDat){
-  templhs <- clhs_fast(X,size = n, include = NULL, 
-                     cost = "layer", iter = 1000, simple = F,progress = T)
+  xMat <- as.matrix(st_drop_geometry(X))
+  temp <- c_clhs(xMat,size = n,i_cost = ncol(xMat),iter = 5000)
+  dat <- X[temp$indeces,]
 
-  pnts <- templhs$sampled_data
+  pnts <- dat
   
   p2 <- st_as_sf(pnts)
   pnts <- pnts[,1]
   colnames(pnts) <- c("name","geometry")
   st_geometry(pnts) <- "geometry"
-  startPnts <- st_as_sf(data.frame(name = "Start",geometry = start))
+  startPnts <- st_as_sf(data.frame(name = "Start",geometry = start_sf))
   pnts <- rbind(pnts, startPnts)
   pnts2 <- as(pnts, "Spatial")
   
@@ -291,7 +301,7 @@ createTSP <- function(X,n,ancDat){
   dMat2[is.infinite(dMat2)] <- 1000
   
   ##penalty based on quality of points
-  objVals <- templhs[["final_obj"]]
+  objVals <- temp[["final_obj"]]
   objVals <- max(objVals) - objVals
   
   maxTime <- 8L ##hours
@@ -317,8 +327,8 @@ createTSP <- function(X,n,ancDat){
   small <- foreach(j = 1:nrow(dat),.combine = rbind) %do% {
     tri <- Tri_build(id = j, x = st_coordinates(dat[j,])[1],y = st_coordinates(dat[j,])[2])
     tPs <- st_sample(tri, size = 15, type = "regular")
-    temp <- st_sf(data.frame(id = j, geometry = tPs)) %>%
-      st_cast("POINT")
+    temp <- suppressWarnings(st_sf(data.frame(id = j, geometry = tPs)) %>%
+       st_cast("POINT"))
     temp
     
   }
@@ -337,24 +347,36 @@ clusterCall(cl, worker.init)
 registerDoParallel(cl)
 
 collectStats <- function(X,sampleFun,nums,testFun1 = sumKSTest,testFun2 = fillTest,ancDat){
-  test_res <- foreach(n = nums, .combine = rbind, .noexport = c("c_cor","obj_fn"), 
-                    .packages = c("Rcpp","LaplacesDemon","foreach","sf","raster","LearnGeom","dplyr"),
-                    .export = c("clhs_fast","lhs_obj","clhs_dist","Tri_build","full")) %dopar% {
+  pkgs <- c("Rcpp","LaplacesDemon", "foreach","sf",
+          "raster","LearnGeom","dplyr","reticulate","gdistance","scales")
+  test_res <- foreach(n = nums, .combine = rbind, .noexport = c("CppLHS"), 
+                      .packages = pkgs,
+                    .export = c("c_clhs","Tri_build","fullSL","start_sf","tr1")) %dopar% {
+                      reticulate::source_python("mTSP.py")
                       smallSet <- sampleFun(X,n,ancDat)
-                      #res1 <- testFun1(full,smallSet)
-                      res2 <- testFun2(full,smallSet)
-                      data.frame(Num = n,fillQual = res2)
+                      res1 <- testFun1(fullSL,smallSet)
+                      res2 <- testFun2(fullSL,smallSet)
+                      data.frame(Num = n,KS = res1, fillQual = res2)
                     }
   return(test_res)
 }
 
-nums <- round(seq(5, 1000, length.out = 50))
-nums <- rep(nums, each = 15)
+nums <- round(seq(5, 100, length.out = 20))
+nums <- rep(nums, each = 5)
 statsLHS_trans <- collectStats(X,createLHS,nums,ancDat = ancDatSL)
+statsLHS_trans$SType = "LHS"
 boxplot(KS ~ Num, data = statsLHS_trans)
 boxplot(fillQual ~ Num, data = statsLHS_trans)
 statsCCLHS_trans <- collectStats(Xcost,createCCLHS,nums, ancDat = ancDatSL)
 boxplot(fillQual ~ Num, data = statsCCLHS_trans)
-statsRand$SType <- "Random"
+statsCCLHS_trans$SType <- "CCLHS"
+statsTSP_trans <- collectStats(Xcost, createTSP, nums, ancDat = ancDatSL)
+
+etest <- function(full,small){
+  dat <- rbind(full,small)
+  s <- c(nrow(full),nrow(small))
+  temp <- eqdist.e(dat, sizes = s)
+}
+
 ```
 
