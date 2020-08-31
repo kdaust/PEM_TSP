@@ -26,7 +26,7 @@ This script uses cost constrained latin hypercube and a travelling salesman algo
 ### Source scripts
 
 ```{r source}
-Rcpp::sourceCpp("CppCLHS.cpp")
+Rcpp::sourceCpp("CppLHS.cpp")
 source("FastCLHS_R.R")
 source_python("./mTSP.py")
 ```
@@ -36,7 +36,7 @@ source_python("./mTSP.py")
 Set aoi to ESSFmc or ESSFmcw depending on interest.
 
 ```{r data}
-aoi <- "ESSFmc"
+aoi <- "ESSFmcw"
 datLocGit <- here("InputData") ## Data
 covLoc <- here("Covariates") ## Too big for git data
 ### landscape levels covariates
@@ -203,7 +203,7 @@ createLayout <- function(startPnts, toInclude, nPoints, iter = 1000){
 
 ```{r parallel}
 worker.init <- function(){
-  Rcpp::sourceCpp("CppCLHS.cpp")
+  Rcpp::sourceCpp("CppLHS.cpp")
 }
 
 require(doParallel)
@@ -293,6 +293,6 @@ writeLayout <- function(id,filename){
 
 ## write gpkgs for each full route
 for(x in 1:length(ids)){
-  writeLayout(id = ids[x], filename = paste0("ESSFnew_",x,".gpkg"))
+  writeLayout(id = ids[x], filename = paste0("ESSFmcw_2_",x,".gpkg"))
 }
 ```
