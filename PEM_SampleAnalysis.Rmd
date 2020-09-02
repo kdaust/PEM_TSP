@@ -185,14 +185,14 @@ createCCLHS <- function(X,n){
   return(small)
 }
 
-worker.init <- function(){
-  Rcpp::sourceCpp("CppLHS.cpp")
-}
-
-require(doParallel)
-cl <- makePSOCKcluster(detectCores()-2)
-clusterCall(cl, worker.init)
-registerDoParallel(cl)
+# worker.init <- function(){
+#   Rcpp::sourceCpp("CppLHS.cpp")
+# }
+# 
+# require(doParallel)
+# cl <- makePSOCKcluster(detectCores()-2)
+# clusterCall(cl, worker.init)
+# registerDoParallel(cl)
 
 collectStats <- function(X,sampleFun,nums,testFun1 = sumKSTest,testFun2 = fillTest, testFun3 = adTest){
   test_res <- foreach(n = nums, .combine = rbind, .noexport = c("CppLHS"), 
@@ -234,7 +234,7 @@ ggplot(statsAll, aes(x = Num, y = Norm, fill = SType))+
 
 ```{r transects}
 ancDatLL_cost <- stack(ancDatLL,acost2)
-fullSet <- sampleRegular(ancDatLL, size = 100000,sp = T)
+fullSet <- sampleRegular(ancDatLL, size = 1000000,sp = T)
 X <- st_as_sf(fullSet)
 X <- X[!is.na(X$X25m_DAH_3Class),]
 fullSL <- sampleRegular(ancDatSL, size = 1000000,GDAL = T)
@@ -276,6 +276,25 @@ createCCLHS <- function(X,n,ancDat){
   }
   temp <- suppressWarnings(raster::extract(ancDat, small))
   temp <- temp[!is.na(temp[1,]),]
+  return(temp)
+}
+
+ancDatVL <- velox(ancDatSL)
+test <- ancDatVL$extract(tri)
+
+createCCLHS_LHS <- function(X,n,ancDat){
+  xMat <- as.matrix(st_drop_geometry(X))
+  temp <- c_clhs(xMat,size = n,i_cost = ncol(xMat),iter = 5000)
+  dat <- X[temp$indeces,]
+  small <- foreach(j = 1:nrow(dat),.combine = rbind) %do% {
+    tri <- Tri_build(id = j, x = st_coordinates(dat[j,])[1],y = st_coordinates(dat[j,])[2])
+    tempDat <- ancDat$extract(tri)
+    tempDat <- tempDat[[1]]
+    tempDat
+  }
+  small <- small[complete.cases(small),]
+  sl_lhs <- c_clhs(small, size = 15*n, iter = 5000)
+  temp <- sl_lhs$sampled_data
   return(temp)
 }
 
@@ -337,46 +356,159 @@ createTSP <- function(X,n,ancDat){
   return(temp)
 }
 
-worker.init <- function(){
-  Rcpp::sourceCpp("CppCLHS.cpp")
-}
-
-require(doParallel)
-cl <- makePSOCKcluster(detectCores()-2)
-clusterCall(cl, worker.init)
-registerDoParallel(cl)
+# worker.init <- function(){
+#   Rcpp::sourceCpp("CppCLHS.cpp")
+# }
+# 
+# require(doParallel)
+# cl <- makePSOCKcluster(detectCores()-2)
+# clusterCall(cl, worker.init)
+# registerDoParallel(cl)
 
 collectStats <- function(X,sampleFun,nums,testFun1 = sumKSTest,testFun2 = fillTest,ancDat){
   pkgs <- c("Rcpp","LaplacesDemon", "foreach","sf",
-          "raster","LearnGeom","dplyr","reticulate","gdistance","scales")
+          "raster","LearnGeom","dplyr","reticulate","gdistance","scales","velox")
   test_res <- foreach(n = nums, .combine = rbind, .noexport = c("CppLHS"), 
                       .packages = pkgs,
-                    .export = c("c_clhs","Tri_build","fullSL","start_sf","tr1")) %dopar% {
+                    .export = c("c_clhs","Tri_build","fullSL","start_sf","tr1")) %dopar% { #
                       reticulate::source_python("mTSP.py")
                       smallSet <- sampleFun(X,n,ancDat)
-                      res1 <- testFun1(fullSL,smallSet)
-                      res2 <- testFun2(fullSL,smallSet)
-                      data.frame(Num = n,KS = res1, fillQual = res2)
+                      smallSet <- smallSet[complete.cases(smallSet),]
+                      if(nrow(smallSet) > 1){
+                        res1 <- testFun1(fullSL,smallSet)
+                        res2 <- testFun2(fullSL,smallSet)
+                        data.frame(Num = n,KS = res1, fillQual = res2)
+                      }else{
+                        NULL
+                      }
+                      
                     }
   return(test_res)
 }
 
 nums <- round(seq(5, 100, length.out = 20))
-nums <- rep(nums, each = 5)
+nums <- rep(nums, each = 30)
 statsLHS_trans <- collectStats(X,createLHS,nums,ancDat = ancDatSL)
 statsLHS_trans$SType = "LHS"
-boxplot(KS ~ Num, data = statsLHS_trans)
-boxplot(fillQual ~ Num, data = statsLHS_trans)
 statsCCLHS_trans <- collectStats(Xcost,createCCLHS,nums, ancDat = ancDatSL)
-boxplot(fillQual ~ Num, data = statsCCLHS_trans)
 statsCCLHS_trans$SType <- "CCLHS"
 statsTSP_trans <- collectStats(Xcost, createTSP, nums, ancDat = ancDatSL)
+statsTSP_trans$SType <- "TSP"
+statsCCLHS_LHS <- collectStats(Xcost, createCCLHS_LHS, nums, ancDat = ancDatVL)
+statsCCLHS_LHS$SType <- "2CCLHS"
 
-etest <- function(full,small){
-  dat <- rbind(full,small)
-  s <- c(nrow(full),nrow(small))
-  temp <- eqdist.e(dat, sizes = s)
+statsAll <- rbind(statsLHS_trans,statsCCLHS_trans,statsTSP_trans,statsCCLHS_LHS)
+statsAll$Num <- as.factor(statsAll$Num)
+statsAll$SType <- as.factor(statsAll$SType)
+ggplot(statsAll, aes(x = Num, y = KS, fill = SType))+
+  geom_boxplot()
+ggplot(statsAll, aes(x = Num, y = fillQual, fill = SType))+
+  geom_boxplot()
+
+```
+
+```{r time cost}
+calcCost <- function(pnts,objVals,dropAllowed){
+  n = nrow(pnts)
+  p2 <- st_as_sf(pnts)
+  pnts <- pnts[,1]
+  colnames(pnts) <- c("name","geometry")
+  st_geometry(pnts) <- "geometry"
+  startPnts <- st_as_sf(data.frame(name = "Start",geometry = start_sf))
+  pnts <- rbind(pnts, startPnts)
+  pnts2 <- as(pnts, "Spatial")
+  
+  ## create distance matrix between sample points
+  test <- costDistance(tr1,pnts2,pnts2)
+  dMat2 <- as.matrix(test)
+  dMat2 <- dMat2*60
+  dMat2[is.infinite(dMat2)] <- 1000
+  
+  ##penalty based on quality of points
+  #objVals <- temp[["final_obj"]]
+  objVals <- max(objVals) - objVals
+  
+  maxTime <- 8L ##hours
+  ## time per transect
+  plotTime <- 45L ##mins
+  minPen <- (maxTime*60L)/2L
+  maxPen <- (maxTime*60L)*2L
+  objVals <- scales::rescale(objVals, to = c(minPen,maxPen))
+  objVals <- as.integer(objVals)
+  
+  if(dropAllowed){
+    ndays <- as.integer(ceiling(n/5)+1)
+    pen = objVals
+  }else{
+    ndays = n/2
+    pen = objVals*2
+  }
+  
+  indStart <- as.integer(rep(n,ndays))
+  ##run vehicle routing problem from python script
+  ## GCS is global span cost coefficient
+  vrp <- py_mTSP(dat = dMat2,num_days = ndays, start = indStart, end = indStart, 
+                 max_cost = maxTime*60L, plot_time = plotTime, penalty =  pen, arbDepot = F, GSC = 5L)
+  time <- vrp[[2]]
+  totTime <- sum(as.numeric(unlist(time)))
+  return(totTime)
 }
 
+timeLHS <- function(X,n){
+  xMat <- as.matrix(st_drop_geometry(X))
+  temp <- c_clhs(xMat,size = n,i_cost = NULL,iter = 5000)
+  return(temp)
+}
+
+timeCCLHS <- function(X,n){
+  xMat <- as.matrix(st_drop_geometry(X))
+  temp <- c_clhs(xMat,size = n,i_cost = ncol(xMat),iter = 5000)
+  return(temp)
+}
+
+collectTime <- function(X,sampleFun,nsample, reps, dropAllowed){
+  pkgs <- c("Rcpp","LaplacesDemon", "foreach","sf",
+          "raster","LearnGeom","dplyr","reticulate","gdistance","scales")
+  test_res <- foreach(n = 1:reps, .combine = rbind, .noexport = c("CppLHS"), 
+                      .packages = pkgs,
+                    .export = c("c_clhs","start_sf","tr1", "calcCost")) %dopar% { #
+                      reticulate::source_python("mTSP.py")
+                      templhs <- sampleFun(X,nsample)
+                      dat <- X[templhs$indeces,]
+                      if(nrow(dat) > 1){
+                        time <- calcCost(dat,templhs$final_obj,dropAllowed)
+                        data.frame(Rep = n, Cost = time)
+                      }else{
+                        NULL
+                      }
+                      
+                    }
+  return(test_res)
+}
+
+numDat <- data.table(statsAll)
+tempDat <- numDat[SType == "LHS",]
+temp <- tempDat[,.(y = median(fillQual)), by = .(Num)]
+temp[,`:=`(y = (y-min(y))/(max(y)-min(y)), Num = as.numeric(as.character(Num)))]
+
+plot(y ~ Num, data = temp)
+spFun <- splinefun(y = temp$Num, x = temp$y)
+  
+x = temp$Num
+y = temp$y
+plot(x, y, xlab="sample number",ylab = "KL Stat")          # Initial plot of the data
+start <- list(k = 1,b1 = 0.05,b0 = 0)
+fit1 <- nls(y ~ k*exp(-b1*x) + b0, start = start)
+lines(x, fitted(fit1), col="red")
+
+xx<- seq(1, 800,1)
+jj <- predict(fit1,list(x=xx))
+
+normalized = (jj-min(jj))/(max(jj)-min(jj))###standardise
+plot(xx,normalized, type = "l")
+approx(x = normalized, y = xx, xout = 0.10)$y###get 90th quantile
+
+
+cclhsTime <- collectTime(X, timeCCLHS, nsample = 20, reps = 14, dropAllowed = T)
 ```
 
