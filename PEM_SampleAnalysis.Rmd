@@ -19,6 +19,7 @@ library(reticulate)
 library(here)
 library(LearnGeom)
 library(tidyverse)
+library(goftest)
 ```
 
 ```{r source}
@@ -32,6 +33,16 @@ sumKSTest <- function(full,small){
     ks <- suppressWarnings(ks.test(full[,i],small[,i]))
     out <- out+ks$statistic
   } 
+  return(out)
+}
+
+adTest <- function(full,small){
+  out <- 0
+  for(i in 1:ncol(full)){
+    fn <- ecdf(full[,i])
+    temp <- ad.test(small[,i], null = fn)
+    out <- out + temp$statistic
+  }
   return(out)
 }
 
@@ -72,8 +83,8 @@ covLoc <- here("Covariates") ## Too big for git data
 
 ### landscape levels covariates
 covars <- paste(covLoc, c("25m_DAH_3Class.tif","25m_LandformClass_Default_Seive4.tif",
-                          "25m_MRVBF_Classified_IS64Low6Up2.tif","dem.tif"), sep = "/")# ,"DEM_25m.tif"
-layerNamesLL <- c("DAH","LFC","MRVBF","DEM","cost") ##need to change this if you change the layers
+                          "25m_MRVBF_Classified_IS64Low6Up2.tif","dem.tif","becRaster.tif"), sep = "/")# ,"DEM_25m.tif"
+layerNamesLL <- c("DAH","LFC","MRVBF","DEM","BEC", "cost") ##need to change this if you change the layers
 ancDatLL <- raster::stack(covars)
 proj4string(ancDatLL) <- "+init=epsg:3005"
 
@@ -100,7 +111,8 @@ colnames(rdsAll)[1] <- "road_surface"
 rdsAll <- as.data.table(rdsAll) %>% st_as_sf()
 
 ##Smithers start location
-start <- st_read("SmithersStart.gpkg") %>% as("Spatial")
+start_sf <- st_read("SmithersStart.gpkg")
+start <- as(start_sf, "Spatial")
 ```
 
 ```{r create cost surface}
@@ -155,7 +167,7 @@ fullSet <- sampleRegular(ancDatSL_cost, size = 100000,useGDAL = T)
 Xcost <- fullSet
 Xcost <- Xcost[complete.cases(Xcost),]
 
-templhs <- c_clhs(x = X, size = 100, i_cost = NULL, iter = 10000)
+##templhs <- c_clhs(x = X, size = 100, i_cost = NULL, iter = 10000)
 
 createRandom <- function(X,n){
   small <- sample(1:nrow(X),size = n, replace = F)
@@ -163,38 +175,39 @@ createRandom <- function(X,n){
 }
 
 createLHS <- function(X,n){
-  temp <- c_clhs(X,size = n, i_cost = NULL, iter = 10000)
+  temp <- c_clhs(X,size = n, i_cost = NULL, iter = 5000)
   small <- as.matrix(temp$sampled_data)
   return(small)
 }
 createCCLHS <- function(X,n){
-  temp <- c_clhs(X,size = n,i_cost = ncol(X), iter = 5000)
+  temp <- c_clhs(X,size = n,i_cost = ncol(X), iter = 1000)
   small <- as.matrix(temp$sampled_data)
   return(small)
 }
 
-worker.init <- function(){
-  Rcpp::sourceCpp("CppLHS.cpp")
-}
+# worker.init <- function(){
+#   Rcpp::sourceCpp("CppLHS.cpp")
+# }
+# 
+# require(doParallel)
+# cl <- makePSOCKcluster(detectCores()-2)
+# clusterCall(cl, worker.init)
+# registerDoParallel(cl)
 
-require(doParallel)
-cl <- makePSOCKcluster(detectCores()-2)
-clusterCall(cl, worker.init)
-registerDoParallel(cl)
-
-collectStats <- function(X,sampleFun,nums,testFun1 = sumKSTest,testFun2 = fillTest){
-  test_res <- foreach(n = nums, .combine = rbind, .noexport = c("c_cor","obj_fn"), 
-                    .packages = c("Rcpp","LaplacesDemon","foreach"),
-                    .export = c("clhs_fast","lhs_obj","clhs_dist")) %do% {
+collectStats <- function(X,sampleFun,nums,testFun1 = sumKSTest,testFun2 = fillTest, testFun3 = adTest){
+  test_res <- foreach(n = nums, .combine = rbind, .noexport = c("CppLHS"), 
+                    .packages = c("Rcpp","LaplacesDemon","foreach","goftest"),
+                    .export = c("c_clhs")) %dopar% {
                       smallSet <- sampleFun(X,n)
                       res1 <- testFun1(X[,1:6],smallSet)
                       res2 <- testFun2(X[,1:6], smallSet)
+                      #res3 <- testFun3(X[,1:6], smallSet)
                       data.frame(Num = n,KS = res1, fill = res2)
                     }
   return(test_res)
 }
 
-nums <- round(seq(10, 800, length.out = 10))
+nums <- round(seq(10, 800, length.out = 20))
 nums <- rep(nums, each = 5)
 statsRand <- collectStats(X,createRandom,nums)
 statsRand$SType <- "Random"
@@ -212,13 +225,7 @@ ggplot(statsAll, aes(x = Num, y = KS, fill = SType))+
 ggplot(statsAll, aes(x = Num, y = fill, fill = SType))+
   geom_boxplot()
 
-boxplot(KS + SType ~ Num, data = statsAll)
-boxplot(KS ~ Num, data = statsRand)
-boxplot(KS ~ Num, data = statsLHS)
-boxplot(KS ~ Num, data = statsCCLHS)
-
-
-statsAll <- as.data.table(statsFill)
+statsAll <- as.data.table(statsAll)
 statsAll[, Norm := (KS-min(KS))/(max(KS)-min(KS))]
 statsAll[,Norm := 1-Norm]
 ggplot(statsAll, aes(x = Num, y = Norm, fill = SType))+
@@ -227,15 +234,17 @@ ggplot(statsAll, aes(x = Num, y = Norm, fill = SType))+
 
 ```{r transects}
 ancDatLL_cost <- stack(ancDatLL,acost2)
-fullSet <- sampleRegular(ancDatLL, size = 100000,sp = T)
+fullSet <- sampleRegular(ancDatLL, size = 1000000,sp = T)
 X <- st_as_sf(fullSet)
 X <- X[!is.na(X$X25m_DAH_3Class),]
-full <- as.matrix(st_drop_geometry(X))
+fullSL <- sampleRegular(ancDatSL, size = 1000000,GDAL = T)
+fullSL <- fullSL[complete.cases(fullSL),]
 
-fullSet <- sampleRegular(ancDatLL_cost, size = 100000,sp = T)
+fullSet <- sampleRegular(ancDatLL_cost, size = 1000000,sp = T)
 Xcost <- st_as_sf(fullSet)
 Xcost <- Xcost[!is.na(Xcost$X25m_DAH_3Class),]
 Xcost <- Xcost[!is.infinite(Xcost$layer),]
+ancDatVL <- velox(ancDatSL) ##create velox object
 
 createLHS <- function(X,n,ancDat){
   xMat <- as.matrix(st_drop_geometry(X))
@@ -243,44 +252,61 @@ createLHS <- function(X,n,ancDat){
   dat <- X[temp$indeces,]
   small <- foreach(j = 1:nrow(dat),.combine = rbind) %do% {
     tri <- Tri_build(id = j, x = st_coordinates(dat[j,])[1],y = st_coordinates(dat[j,])[2])
-    tPs <- st_sample(tri, size = 15, type = "regular")
-    temp <- st_sf(data.frame(id = j, geometry = tPs)) %>%
-      st_cast("POINT")
+    tempDat <- ancDat$extract(tri)
+    tempDat <- tempDat[[1]]
+    tempDat
+  }
+  small <- small[complete.cases(small),]
+  sl_lhs <- c_clhs(small, size = 25*n, iter = 5000)
+  temp <- sl_lhs$sampled_data
+  return(temp)
+}
+
+createCCLHS_30m <- function(X,n,ancDat){
+  xMat <- as.matrix(st_drop_geometry(X))
+  temp <- c_clhs(xMat,size = n,i_cost = ncol(xMat),iter = 5000)
+  dat <- X[temp$indeces,]
+  small <- foreach(j = 1:nrow(dat),.combine = rbind) %do% {
+    tri <- Tri_build(id = j, x = st_coordinates(dat[j,])[1],y = st_coordinates(dat[j,])[2])
+    tPs <- st_sample(tri, size = 25, type = "regular")
+    temp <- suppressWarnings(st_sf(data.frame(id = j, geometry = tPs)) %>%
+       st_cast("POINT"))
     temp
     
   }
-  temp <- raster::extract(ancDat, small)
+  temp <- suppressWarnings(raster::extract(ancDat, small))
   temp <- temp[!is.na(temp[1,]),]
   return(temp)
 }
 
 createCCLHS <- function(X,n,ancDat){
-  temp <- clhs_fast(X,size = n,cost = 'layer', iter = 1000, simple = F,progress = T)
-  dat <- temp$sampled_data
+  xMat <- as.matrix(st_drop_geometry(X))
+  temp <- c_clhs(xMat,size = n,i_cost = ncol(xMat),iter = 5000)
+  dat <- X[temp$indeces,]
   small <- foreach(j = 1:nrow(dat),.combine = rbind) %do% {
     tri <- Tri_build(id = j, x = st_coordinates(dat[j,])[1],y = st_coordinates(dat[j,])[2])
-    tPs <- st_sample(tri, size = 15, type = "regular")
-    temp <- st_sf(data.frame(id = j, geometry = tPs)) %>%
-      st_cast("POINT")
-    temp
-    
+    tempDat <- ancDat$extract(tri)
+    tempDat <- tempDat[[1]]
+    tempDat
   }
-  temp <- raster::extract(ancDat, small)
-  temp <- temp[!is.na(temp[1,]),]
+  small <- small[complete.cases(small),]
+  sl_lhs <- c_clhs(small, size = 25*n, iter = 5000)
+  temp <- sl_lhs$sampled_data
   return(temp)
 }
 
 createTSP <- function(X,n,ancDat){
-  templhs <- clhs_fast(X,size = n, include = NULL, 
-                     cost = "layer", iter = 1000, simple = F,progress = T)
+  xMat <- as.matrix(st_drop_geometry(X))
+  temp <- c_clhs(xMat,size = n,i_cost = ncol(xMat),iter = 5000)
+  dat <- X[temp$indeces,]
 
-  pnts <- templhs$sampled_data
+  pnts <- dat
   
   p2 <- st_as_sf(pnts)
   pnts <- pnts[,1]
   colnames(pnts) <- c("name","geometry")
   st_geometry(pnts) <- "geometry"
-  startPnts <- st_as_sf(data.frame(name = "Start",geometry = start))
+  startPnts <- st_as_sf(data.frame(name = "Start",geometry = start_sf))
   pnts <- rbind(pnts, startPnts)
   pnts2 <- as(pnts, "Spatial")
   
@@ -291,14 +317,16 @@ createTSP <- function(X,n,ancDat){
   dMat2[is.infinite(dMat2)] <- 1000
   
   ##penalty based on quality of points
-  objVals <- templhs[["final_obj"]]
+  objVals <- temp[["final_obj"]]
   objVals <- max(objVals) - objVals
   
   maxTime <- 8L ##hours
   ## time per transect
   plotTime <- 45L ##mins
-  minPen <- (maxTime*60L)/2L
-  maxPen <- (maxTime*60L)*2L
+  temp <- dMat2[1:n,1:n]
+  maxDist <- sum(temp[upper.tri(temp)])
+  minPen <- maxDist * 1.5
+  maxPen <- maxDist * 5
   objVals <- scales::rescale(objVals, to = c(minPen,maxPen))
   objVals <- as.integer(objVals)
   
@@ -307,7 +335,8 @@ createTSP <- function(X,n,ancDat){
   ##run vehicle routing problem from python script
   ## GCS is global span cost coefficient
   vrp <- py_mTSP(dat = dMat2,num_days = ndays, start = indStart, end = indStart, 
-                 max_cost = maxTime*60L, plot_time = plotTime, penalty =  objVals, arbDepot = F, GSC = 5L)
+                 max_cost = maxTime*60L, plot_time = plotTime, penalty =  objVals, arbDepot = F, GSC = 15L)
+  
   result <- vrp[[1]]
   idxs <- as.numeric(unlist(result))
   idxs <- idxs[idxs != n]
@@ -316,19 +345,18 @@ createTSP <- function(X,n,ancDat){
   dat <- pnts[idxs,]
   small <- foreach(j = 1:nrow(dat),.combine = rbind) %do% {
     tri <- Tri_build(id = j, x = st_coordinates(dat[j,])[1],y = st_coordinates(dat[j,])[2])
-    tPs <- st_sample(tri, size = 15, type = "regular")
-    temp <- st_sf(data.frame(id = j, geometry = tPs)) %>%
-      st_cast("POINT")
-    temp
-    
+    tempDat <- ancDat$extract(tri)
+    tempDat <- tempDat[[1]]
+    tempDat
   }
-  temp <- raster::extract(ancDat, small)
-  temp <- temp[!is.na(temp[1,]),]
+  small <- small[complete.cases(small),]
+  sl_lhs <- c_clhs(small, size = 25*n, iter = 5000)
+  temp <- sl_lhs$sampled_data
   return(temp)
 }
 
 worker.init <- function(){
-  Rcpp::sourceCpp("CppCLHS.cpp")
+  Rcpp::sourceCpp("./CppLHS.cpp")
 }
 
 require(doParallel)
@@ -337,24 +365,165 @@ clusterCall(cl, worker.init)
 registerDoParallel(cl)
 
 collectStats <- function(X,sampleFun,nums,testFun1 = sumKSTest,testFun2 = fillTest,ancDat){
-  test_res <- foreach(n = nums, .combine = rbind, .noexport = c("c_cor","obj_fn"), 
-                    .packages = c("Rcpp","LaplacesDemon","foreach","sf","raster","LearnGeom","dplyr"),
-                    .export = c("clhs_fast","lhs_obj","clhs_dist","Tri_build","full")) %dopar% {
+  pkgs <- c("Rcpp","LaplacesDemon", "foreach","sf",
+          "raster","LearnGeom","dplyr","reticulate","gdistance","scales","velox")
+  test_res <- foreach(n = nums, .combine = rbind, .noexport = c("CppLHS"), 
+                      .packages = pkgs,
+                    .export = c("c_clhs","Tri_build","fullSL","start_sf","tr1")) %dopar% { #
+                      reticulate::source_python("mTSP.py")
                       smallSet <- sampleFun(X,n,ancDat)
-                      #res1 <- testFun1(full,smallSet)
-                      res2 <- testFun2(full,smallSet)
-                      data.frame(Num = n,fillQual = res2)
+                      smallSet <- smallSet[complete.cases(smallSet),]
+                      if(nrow(smallSet) > 1){
+                        res1 <- testFun1(fullSL,smallSet)
+                        res2 <- testFun2(fullSL,smallSet)
+                        data.frame(Num = n,KS = res1, fillQual = res2)
+                      }else{
+                        NULL
+                      }
+                      
                     }
   return(test_res)
 }
 
-nums <- round(seq(5, 1000, length.out = 50))
-nums <- rep(nums, each = 15)
-statsLHS_trans <- collectStats(X,createLHS,nums,ancDat = ancDatSL)
-boxplot(KS ~ Num, data = statsLHS_trans)
-boxplot(fillQual ~ Num, data = statsLHS_trans)
-statsCCLHS_trans <- collectStats(Xcost,createCCLHS,nums, ancDat = ancDatSL)
-boxplot(fillQual ~ Num, data = statsCCLHS_trans)
-statsRand$SType <- "Random"
+nums <- round(seq(5, 80, length.out = 20))
+nums <- rep(nums, each = 10)
+statsLHS_trans <- collectStats(X,createLHS,nums,ancDat = ancDatVL)
+statsLHS_trans$SType = "LHS"
+fwrite(statsLHS_trans, "LHSNumSave.csv")
+statsCCLHS_trans <- collectStats(Xcost,createCCLHS,nums, ancDat = ancDatVL)
+statsCCLHS_trans$SType <- "CCLHS"
+fwrite(statsCCLHS_trans, "CCLHSNumSave.csv")
+statsTSP_trans <- collectStats(Xcost, createTSP, nums, ancDat = ancDatVL)
+statsTSP_trans$SType <- "TSP"
+fwrite(statsTSP_trans, "TSPNumSave.csv")
+statsCCLHS_30m <- collectStats(Xcost, createCCLHS_30m, nums, ancDat = ancDatSL)
+statsCCLHS_30m$SType <- "CCLHSReg"
+
+statsAll <- rbind(statsLHS_trans,statsCCLHS_trans,statsTSP_trans)
+statsAll$Num <- as.factor(statsAll$Num)
+statsAll$SType <- as.factor(statsAll$SType)
+ggplot(statsAll, aes(x = Num, y = KS, fill = SType))+
+  geom_boxplot()
+ggplot(statsAll, aes(x = Num, y = fillQual, fill = SType))+
+  geom_boxplot()
+
+statsComp <- rbind(statsCCLHS_trans,statsCCLHS_30m)
+statsComp$SType <- as.factor(statsComp$SType)
+statsComp$Num <- as.factor(statsComp$Num)
+ggplot(statsComp, aes(x = Num, y = KS, fill = SType))+
+  geom_boxplot()
+
+ggplot(statsComp, aes(x = Num, y = fillQual, fill = SType))+
+  geom_boxplot()
+
+
+```
+
+```{r time cost}
+calcCost <- function(pnts,objVals,dropAllowed){
+  n = nrow(pnts)
+  p2 <- st_as_sf(pnts)
+  pnts <- pnts[,1]
+  colnames(pnts) <- c("name","geometry")
+  st_geometry(pnts) <- "geometry"
+  startPnts <- st_as_sf(data.frame(name = "Start",geometry = start_sf))
+  pnts <- rbind(pnts, startPnts)
+  pnts2 <- as(pnts, "Spatial")
+  
+  ## create distance matrix between sample points
+  test <- costDistance(tr1,pnts2,pnts2)
+  dMat2 <- as.matrix(test)
+  dMat2 <- dMat2*60
+  dMat2[is.infinite(dMat2)] <- 1000
+  
+  ##penalty based on quality of points
+  objVals <- max(objVals) - objVals
+  
+  maxTime <- 8L ##hours
+  ## time per transect
+  plotTime <- 45L ##mins
+  temp <- dMat2[1:n,1:n]
+  maxDist <- sum(temp[upper.tri(temp)])
+  minPen <- maxDist
+  maxPen <- maxDist * 4
+  objVals <- scales::rescale(objVals, to = c(minPen,maxPen))
+  objVals <- as.integer(objVals)
+  
+  if(dropAllowed){
+    ndays <- as.integer(ceiling(n/5)+1)
+    pen = objVals
+  }else{
+    ndays <- as.integer(ceiling(n/2))
+    pen = as.integer(objVals*10)
+  }
+  
+  indStart <- as.integer(rep(n,ndays))
+  ##run vehicle routing problem from python script
+  ## GCS is global span cost coefficient
+  vrp <- py_mTSP(dat = dMat2,num_days = ndays, start = indStart, end = indStart, 
+                 max_cost = maxTime*60L, plot_time = plotTime, penalty =  pen, arbDepot = F, GSC = 5L)
+  time <- vrp[[2]]
+  totTime <- sum(as.numeric(unlist(time)))
+  return(totTime)
+}
+
+timeLHS <- function(X,n){
+  xMat <- as.matrix(st_drop_geometry(X))
+  temp <- c_clhs(xMat,size = n,i_cost = NULL,iter = 5000)
+  return(temp)
+}
+
+timeCCLHS <- function(X,n){
+  xMat <- as.matrix(st_drop_geometry(X))
+  temp <- c_clhs(xMat,size = n,i_cost = ncol(xMat),iter = 5000)
+  return(temp)
+}
+
+collectTime <- function(X,sampleFun,nsample, reps, dropAllowed){
+  pkgs <- c("Rcpp","LaplacesDemon", "foreach","sf",
+          "raster","LearnGeom","dplyr","reticulate","gdistance","scales")
+  test_res <- foreach(n = 1:reps, .combine = rbind, .noexport = c("CppLHS"), 
+                      .packages = pkgs,
+                    .export = c("c_clhs","start_sf","tr1", "calcCost")) %dopar% { #
+                      reticulate::source_python("mTSP.py")
+                      templhs <- sampleFun(X,nsample)
+                      dat <- X[templhs$indeces,]
+                      if(nrow(dat) > 1){
+                        time <- calcCost(dat,templhs$final_obj,dropAllowed)
+                        data.frame(Rep = n, Cost = time)
+                      }else{
+                        NULL
+                      }
+                      
+                    }
+  return(test_res)
+}
+
+numDat <- data.table(statsAll)
+
+calcNumTrans <- function(type, numDat){
+  tempDat <- numDat[SType == type,]
+  temp <- tempDat[,.(y = median(KS)), by = .(Num)]
+  temp[,`:=`(y = (y-min(y))/(max(y)-min(y)), Num = as.numeric(as.character(Num)))]
+  l1 <- loess(Num ~ y, data = temp)
+  
+  temp <- tempDat[,.(y = median(fillQual)), by = .(Num)]
+  temp[,`:=`(y = (y-min(y))/(max(y)-min(y)), Num = as.numeric(as.character(Num)))]
+  l2 <- loess(Num ~ y, data = temp)
+  numTrans <- predict(l1,data.frame(y = 0.15)) %>% 
+    round(digits = 0) %>% as.integer()
+  return(numTrans)
+}
+
+LHSTime <- collectTime(X,timeLHS,nsample = calcNumTrans("LHS",numDat),reps = 14, dropAllowed = F)
+LHSTime$Type = "LHS"
+CCLHSTime <- collectTime(Xcost,timeCCLHS,nsample = calcNumTrans("CCLHS",numDat),reps = 14, dropAllowed = F)
+CCLHSTime$Type = "CCLHS"
+TSPTime <- collectTime(Xcost, timeCCLHS, nsample = calcNumTrans("TSP",numDat), reps = 14, dropAllowed = T)
+TSPTime$Type = "TSP"
+
+timeAll <- rbind(LHSTime,CCLHSTime,TSPTime)
+timeAll$Cost <- timeAll$Cost/480
+boxplot(Cost ~ Type, data = timeAll)
 ```
 
