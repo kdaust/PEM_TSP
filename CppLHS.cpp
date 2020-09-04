@@ -89,7 +89,6 @@ IntegerVector hist(NumericVector x, NumericVector breaks){ //based on C_bincount
     int nb = breaks.length();
     int nb1 = nb-1;
     int i,lo,hi,newVal;
-    bool right = true,include_border = true;
     //R_xlen_t i, lo, hi, nb1 = nb - 1, new;
     
     IntegerVector counts(nb1);
@@ -119,7 +118,8 @@ struct objResult {
 };
 
 //objective function
-objResult obj_fn(arma::mat x, NumericMatrix strata, NumericMatrix cor_full, int eta = 1){
+objResult obj_fn(arma::mat x, NumericMatrix strata, arma::mat include, NumericMatrix cor_full, int eta = 1){
+  arma::mat x_all = join_vert(x,include);
   int num_vars = x.n_cols;
   int num_obs = strata.nrow();
   NumericVector hist_cnt;
@@ -132,7 +132,7 @@ objResult obj_fn(arma::mat x, NumericMatrix strata, NumericMatrix cor_full, int 
   std::vector<double> obj_cont2;
   
   for(int i = 0; i < num_vars; i++){
-    data = wrap(x.col(i));
+    data = wrap(x_all.col(i));
     strata_curr = strata(_,i);
     hist_out(_,i) = hist(data,strata_curr);
   }
@@ -145,7 +145,7 @@ objResult obj_fn(arma::mat x, NumericMatrix strata, NumericMatrix cor_full, int 
   obj_cont = rowSums(t2);
   obj_cont2 = as<std::vector<double>>(obj_cont);
   //Rcout << "RowSums : " << obj_cont << "\n";
-  NumericMatrix cor_new = c_cor(wrap(x));
+  NumericMatrix cor_new = c_cor(wrap(x_all));
   //Rcout << "cormat " << cor_new << "\n";
   double obj_cor = sum(abs(cor_full - cor_new));
   double objFinal = sum(obj_cont) + obj_cor*2;
@@ -157,10 +157,10 @@ objResult obj_fn(arma::mat x, NumericMatrix strata, NumericMatrix cor_full, int 
 //Main Function
 
 // [[Rcpp::export]]
-List CppLHS(NumericMatrix x, NumericVector cost, NumericMatrix strata, int nsample, bool cost_mode, int iter, 
+List CppLHS(arma::mat xA, NumericVector cost, NumericMatrix strata, arma::mat include, int nsample, bool cost_mode, int iter, 
                         double temperature = 1, double tdecrease = 0.95, int length_cycle = 8){
   
-  int ndata = x.nrow();
+  int ndata = xA.n_rows;
   double prev_obj;
   double obj;
   double delta_obj;
@@ -173,8 +173,7 @@ List CppLHS(NumericMatrix x, NumericVector cost, NumericMatrix strata, int nsamp
   IntegerVector prev_unsampled;
   NumericVector prev_contObj;
   arma::mat x_curr;
-  arma::mat xA = as<arma::mat>(x);
-  NumericMatrix cor_mat = c_cor(x);
+  NumericMatrix cor_mat = c_cor(wrap(xA));
   
   std::vector<double> delta_cont;
   std::vector<double> delta_cont_prev;
@@ -189,18 +188,18 @@ List CppLHS(NumericMatrix x, NumericVector cost, NumericMatrix strata, int nsamp
   std::iota(idx.begin(),idx.end(),0);
   std::vector<double>::iterator it_worse;
   int i_worse;
-  
   IntegerVector idx2;
   NumericVector temp;
+  NumericVector obj_values(iter);
   
   i_sampled = as<std::vector<int>>(Rcpp::sample(ndata-1,nsample,false));
   i_unsampled = vector_diff(idx,i_sampled);
   arma::uvec arm_isamp = arma::conv_to<arma::uvec>::from(i_sampled);
   x_curr = xA.rows(arm_isamp); // is this efficient?
   //Rcout << "Finish initial sample \n";
-  NumericMatrix cor_full = c_cor(x);
+  NumericMatrix cor_full = c_cor(wrap(xA));
   //Rcout << "cormat " << cor_full << "\n";
-  struct objResult res = obj_fn(x_curr,strata,cor_full);
+  struct objResult res = obj_fn(x_curr,strata,include,cor_full);
   obj = res.objRes;
   delta_cont = res.obj_cont_res;
   //Rcout << "Finished function; obj = "<< obj << "\n";
@@ -210,8 +209,6 @@ List CppLHS(NumericMatrix x, NumericVector cost, NumericMatrix strata, int nsamp
     temp = cost[idx2];
     opCost = sum(temp);
   }
-  
-  NumericVector obj_values(iter);
   
   for(int i = 0; i < iter; i++){
     //Rcout << i << " ";
@@ -252,7 +249,7 @@ List CppLHS(NumericMatrix x, NumericVector cost, NumericMatrix strata, int nsamp
     //Rcout << "sending to function \n";
     arm_isamp = arma::conv_to<arma::uvec>::from(i_sampled);
     x_curr = xA.rows(arm_isamp); // is this efficient?
-    res = obj_fn(x_curr,strata,cor_full); //test this
+    res = obj_fn(x_curr,strata,include,cor_full); //test this
     obj = res.objRes;
     delta_cont = res.obj_cont_res;
     NumericVector dcTemp = wrap(delta_cont);
@@ -272,7 +269,7 @@ List CppLHS(NumericMatrix x, NumericVector cost, NumericMatrix strata, int nsamp
     }
     
     //Revert Change
-    if(delta_obj > 0 && runif(1,0,1)[0] >= metropolis || runif(1,0,1)[1] >= metropolis_cost){
+    if((delta_obj > 0 && runif(1,0,1)[0] >= metropolis) || (runif(1,0,1)[1] >= metropolis_cost)){
       //Rcout << "In revert change \n";
       i_sampled = i_sampled_prev;
       i_unsampled = i_unsampled_prev;
