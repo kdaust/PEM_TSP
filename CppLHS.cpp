@@ -89,7 +89,6 @@ IntegerVector hist(NumericVector x, NumericVector breaks){ //based on C_bincount
     int nb = breaks.length();
     int nb1 = nb-1;
     int i,lo,hi,newVal;
-    bool right = true,include_border = true;
     //R_xlen_t i, lo, hi, nb1 = nb - 1, new;
     
     IntegerVector counts(nb1);
@@ -270,7 +269,7 @@ List CppLHS(arma::mat xA, NumericVector cost, NumericMatrix strata, arma::mat in
     }
     
     //Revert Change
-    if(delta_obj > 0 && runif(1,0,1)[0] >= metropolis || runif(1,0,1)[1] >= metropolis_cost){
+    if((delta_obj > 0 && runif(1,0,1)[0] >= metropolis) || (runif(1,0,1)[1] >= metropolis_cost)){
       //Rcout << "In revert change \n";
       i_sampled = i_sampled_prev;
       i_unsampled = i_unsampled_prev;

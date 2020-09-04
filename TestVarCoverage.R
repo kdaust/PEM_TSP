@@ -11,6 +11,7 @@ library(here)
 library(LearnGeom)
 library(tidyverse)
 library(goftest)
+library(stars)
 source("FastCLHS_R.R")
 
 
@@ -50,22 +51,23 @@ fillTest <- function(full, small){
 }
 
 datLocGit <- here("InputData") ## Data
-covLoc <- "/media/kiridaust/MrBig/boundary/BoundaryTSA_AOI/1_map_inputs/covariates/5m/" 
+covLoc <- "/media/kiridaust/MrBig/boundary/BoundaryTSA_AOI/1_map_inputs/covariates/5m/"
+covLoc <- "E:/boundary/BoundaryTSA_AOI/1_map_inputs/covariates/5m/"
 
 SLcov <- c("max_fp_l.tif","rid_level.tif","twi.tif","mrvbf.tif","convergence.tif","flow_accum_ft.tif",
            "aspect.tif","dem.tif")
 covars <- paste(covLoc, SLcov, sep = "/")
 ancDatSL <- raster::stack(covars)
 proj4string(ancDatSL) <- "+init=epsg:3005"
+st_ancDat <- read_stars(covars, proxy = T)
 
 ### BGC1
 bgc <- st_read(dsn = datLocGit, layer = "Boundary_BGC_dissolved")
 bgcSub <- bgc[bgc$MAP_LABEL == "IDFdm1",]
-rast <- raster(covars[1])
-rast <- fasterize(bgcSub, rast)
-
-ancDatSL <- mask(ancDatSL,rast)
-fullSet <- sampleRegular(ancDatSL, size = 1000000,useGDAL = T)
+tempR <- raster(covars[1])
+tempR <- fasterize(bgcSub, tempR)
+ancDatSL <- stack(ancDatSL, tempR)
+fullSet <- sampleRegular(ancDatSL, size = 10000000,useGDAL = T)
 X <- fullSet
 X <- X[complete.cases(X),]
 
