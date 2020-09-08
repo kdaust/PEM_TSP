@@ -5,7 +5,7 @@
 #   c = rexp(nsamp)*4,
 #   d = rgamma(nsamp, shape = 2)
 # )
-# size = 20
+# size = 100
 # cost = runif(nsamp, min = 0, max = 5)
 # continuous_strata <- apply(
 #   df,
