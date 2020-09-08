@@ -52,15 +52,18 @@ fillTest <- function(full, small){
 datLocGit <- here("InputData") ## Data
 covLoc <- "/media/kiridaust/MrBig/boundary/BoundaryTSA_AOI/1_map_inputs/covariates/5m/" 
 
-SLcov <- c("max_fp_l.tif","rid_level.tif","twi.tif","mrvbf.tif","convergence.tif","flow_accum_ft.tif",
+SLcov <- c("rid_level.tif","twi.tif","mrvbf.tif","convergence.tif","flow_accum_ft.tif",
            "aspect.tif","dem.tif")
 covars <- paste(covLoc, SLcov, sep = "/")
 ancDatSL <- raster::stack(covars)
 proj4string(ancDatSL) <- "+init=epsg:3005"
+ancDat <- read_stars(covars, proxy = T)
 
 ### BGC1
 bgc <- st_read(dsn = datLocGit, layer = "Boundary_BGC_dissolved")
 bgcSub <- bgc[bgc$MAP_LABEL == "IDFdm1",]
+ancDat <- ancDat[bgcSub]
+test <- st_as_stars(ancDat)
 rast <- raster(covars[1])
 rast <- fasterize(bgcSub, rast)
 

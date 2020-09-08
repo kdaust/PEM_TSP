@@ -15,6 +15,23 @@ std::vector<int> vector_diff( const std::vector<int>& model, const std::vector<i
   return result;
 }
 
+// [[Rcpp::export]]
+CharacterVector testList(NumericMatrix x){
+  List L(5);
+  for(int i = 0; i < 5; i++){
+    L[i] = Rcpp::table(x(_,i));
+  }
+  NumericVector y = L[1];
+  CharacterVector z = y.attr("names");
+  return(z);
+}
+
+// [[Rcpp::export]]
+arma::mat test2(arma::mat x, arma::mat include){
+  x = join_vert(x,include);
+  return(x);
+}
+
 // // [[Rcpp::export]]
 // int test(int ndata, int nsample){
 //   std::vector<int> idx_removed;
