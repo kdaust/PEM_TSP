@@ -65,12 +65,10 @@ ancDat <- read_stars(covars, proxy = T)
 ### BGC1
 bgc <- st_read(dsn = datLocGit, layer = "Boundary_BGC_dissolved")
 bgcSub <- bgc[bgc$MAP_LABEL == "IDFdm1",]
-ancDat <- ancDat[bgcSub]
-test <- st_as_stars(ancDat)
 rast <- raster(covars[1])
 rast <- fasterize(bgcSub, rast)
 
-ancDatSL <- mask(ancDatSL,rast)
+ancDatSL <- stack(ancDatSL,rast)
 
 fullSet <- sampleRegular(ancDatSL, size = 1000000,useGDAL = T)
 X <- fullSet
@@ -128,10 +126,24 @@ statsLHS <- collectStats(X,createLHS, nums)
 boxplot(fill ~ Num, data = statsLHS)
 boxplot(KS ~ Num, data = statsLHS)
 
-sampleDat <- st_read(dsn = paste0(datLocGit,"/transect1_30m_pts_att.gpkg"))
+sampleDat <- st_read(dsn = paste0(datLocGit,"/BoundaryTrainingPnts/transect1_30m_pts_att.gpkg"))
 sampleDat <- sampleDat["id"]
-sampleDat <- sampleDat[grep("MSdm1",sampleDat$id),]
-temp <- raster::extract(ancDatSL,sampleDat)
+sampleDat <- sampleDat[grep("IDFdm1",sampleDat$id),]
+sampled30m <- raster::extract(ancDatSL,sampleDat)
+sampled30m <- sampled30m[,-8]
+
+
+sampleDat <- st_read(dsn = paste0(datLocGit,"/BoundaryTrainingPnts/transect1_all_pts_att.gpkg"))
+sampleDat <- sampleDat["id"]
+sampleDat <- sampleDat[grep("IDFdm1",sampleDat$id),]
+sampledAll <- raster::extract(ancDatSL,sampleDat)
+sampledAll <- sampledAll[,-8]
+temp <- c_clhs(sampledAll,size = nrow(sampled30m),iter = 5000)
+sampledAll <- temp$sampled_data
+
+sumKSTest(X,sampled30m)
+sumKSTest(X,sampledAll)
+fillTest(X,temp)
 
 orig <- as.data.table(X)
 orig <- orig[complete.cases(orig),]
@@ -151,6 +163,4 @@ ggplot(out, aes(x = x, y = y, group = Type, colour = Type))+
   geom_line()+
   facet_wrap(.~Var, scales = "free")
 
-temp <- temp[,-8]
-sumKSTest(X,temp)
-fillTest(X,temp)
+

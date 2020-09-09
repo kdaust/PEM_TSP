@@ -1,0 +1,196 @@
+library(clhs)
+library(sf)
+library(raster)
+library(sp)
+library(gdistance)
+library(foreach)
+library(data.table)
+library(fasterize)
+library(reticulate)
+library(here)
+
+source("FastCLHS_R.R")
+source_python("./mTSP.py")
+
+datLocGit <- here("InputData/Boundary") ## Data
+covLoc <- here("BoundaryCovs") ## Too big for git data
+### landscape levels covariates
+# covars <- paste(covLoc, c("25m_DAH_3Class.tif","25m_LandformClass_Default_Seive4.tif",
+#                           "25m_MRVBF_Classified_IS64Low6Up2.tif","dem.tif"), sep = "/")# ,"DEM_25m.tif"
+covars <- paste(covLoc, c("dah.tif","landforms_fixed.tif", "mrvbf.tif","dem.tif"), sep = "/")
+layerNames <- c("DAH","LFC","MRVBF","DEM","cost") ##need to change this if you change the layers
+ancDat <- raster::stack(covars)
+proj4string(ancDat) <- "+init=epsg:3005"
+
+###read in roads
+rdsAll <- st_read(dsn = paste0(datLocGit,"/Boundary_PEM_prep.gdb"), layer = "A2_BCGW_ROAD_ATLAS_MPAR")
+rdsAll <- rdsAll[,c("ROAD_SURFACE","ROAD_CLASS")]
+rdsAll <- rdsAll[rdsAll$ROAD_SURFACE != "overgrown",]
+colnames(rdsAll)[2] <- "road_surface"
+rdsAll <- as.data.table(rdsAll) %>% st_as_sf()
+
+##road speed
+rSpd <- fread("road_spd_boundary.csv")
+#rSpd[,Values := (1/speed)/40]
+rSpd[,Values := speed] ##convert to m/h
+rdsAll <- merge(rdsAll, rSpd, by = "road_surface", all = F)
+rdsAll <- rdsAll[,"Values"]
+allRast <- raster(rdsAll, resolution = 25)
+
+rdsAll <- st_buffer(rdsAll,dist = 35, endCapStyle = "SQUARE", joinStyle = "MITRE")
+rdsAll <- st_cast(rdsAll, "MULTIPOLYGON")
+rdsRast <- fasterize(rdsAll, allRast, field = "Values")
+
+## dem for transtion layer
+alt <- raster(paste0(covLoc, "/dem.tif"))
+proj4string(alt) <- "+init=epsg:3005"
+
+alt2 <- projectRaster(alt,rdsRast,method = 'ngb')
+altAll <- merge(rdsRast, alt2)
+
+
+trFn <- function(x){
+  if(x[1] > 500 & x[2] > 500){
+    x[1]-x[2]
+  }else{
+    min(x[1],x[2])
+  }
+}
+
+rdIdx <- which(values(altAll) < 100)
+slpIdx <- which(values(altAll) > 500)
+rdAdj <- adjacent(altAll, cells = rdIdx, pairs = T, directions = 8)
+adj <- adjacent(altAll, cells = slpIdx, pairs = T, directions = 8)
+adj <- adj[!adj[,1] %in% rdIdx ,]
+adj <- adj[!adj[,2] %in% rdIdx ,]
+
+tr <- transition(altAll,trFn,directions = 8, symm = F) ##altDiff and speed (km/h)
+
+tr1 <- geoCorrection(tr) ##divided by 25 - slope and conductance (km/h/m)
+tr1[adj] <- (3/5)*(6*exp(-3.5*abs(tr1[adj] + 0.08))) ##tobler's hiking function * 3/5 - gives km/h
+tr1 <- tr1*1000 ##now roads are correct conductance (h/m), and walking in m/h
+tr2 <- geoCorrection(tr1) ##have to geocorrect this part again
+tr1[adj] <- tr2[adj] ##tr1 values are now all conductance in h/metre
+
+# tr1[rdAdj] <- 1/0.02
+# tr1[cbind(rdAdj[,2],rdAdj[,1])] <- 1/0.02
+# tr1 <- geoCorrection(tr1)
+
+cities <- st_read(paste0(datLocGit,"/Boundary_PEM_prep.gdb"), layer = "A2_BCGW_MAJOR_CITIES_500m")
+start <- cities[cities$NAME == "Osoyoos","NAME"] %>% as("Spatial")
+acost <- accCost(tr1,start)
+plot(acost)
+writeRaster(acost, "TestAcost.tif", "GTiff")
+
+acost2 <- projectRaster(acost, ancDat)
+acost2 <- mask(acost2, alt)
+lays <- stack(ancDat,acost2)
+names(lays) <- layerNames
+bgc <- st_read(dsn = here("InputData/Boundary"), layer = "Boundary_BGC_dissolved")
+bgc <- bgc[bgc$MAP_LABEL == "ESSFdc2",]
+bgc <- st_cast(bgc,"POLYGON")
+bgc$ID <- seq_along(bgc$MAP_LABEL)
+bgc <- bgc[bgc$ID %in% c(1,2),]
+bgc <- st_buffer(bgc, dist = -144)
+maskRast <- fasterize(bgc,alt)
+lays <- mask(lays,maskRast)
+lays <- crop(lays,bgc)
+cutblks <- st_read(here("InputData/Boundary/cutblock1.gpkg"))
+cutblks <- st_crop(cutblks,bgc)
+cutblks <- st_buffer(cutblks,144)
+cutblkRast <- fasterize(cutblks, lays$DAH)
+lays <- mask(lays, cutblkRast, inverse = T)
+rdsAll <- st_read(dsn = paste0(datLocGit,"/Boundary_PEM_prep.gdb"), layer = "A2_BCGW_ROAD_ATLAS_MPAR")
+rdsAll <- rdsAll[,c("ROAD_SURFACE","ROAD_CLASS")]
+rdsAll <- rdsAll[rdsAll$ROAD_SURFACE != "overgrown",]
+colnames(rdsAll)[2] <- "road_surface"
+rds <- st_crop(rdsAll, bgc)
+rds <- st_buffer(rds, dist = 144)
+lays <- mask(lays, rds, inverse = T)
+
+s <- sampleRegular(lays , size = 5000000, sp = TRUE) # sample raster
+s <- s[!is.na(s$DAH) & !is.infinite(s$cost),]
+s <- st_as_sf(s)
+temp <- st_drop_geometry(s) %>% as.matrix()
+templhs <- c_clhs(temp,size = 10, include = NULL, 
+                     i_cost = 5, iter = 10000)
+
+idx <- templhs$indeces
+pnts <- s[idx,]
+plot(acost2)
+plot(pnts, add = T)
+
+p2 <- st_as_sf(pnts)
+pnts <- pnts[,"DAH"]
+colnames(pnts) <- c("name","geometry")
+st_geometry(pnts) <- "geometry"
+start <- st_as_sfc(start) %>% st_transform(st_crs(pnts))
+startPnts <- st_as_sf(data.frame(name = "Start",geometry = start))
+pnts <- rbind(pnts, startPnts)
+pnts2 <- as(pnts, "Spatial")
+
+## create distance matrix between sample points
+test <- costDistance(tr1,pnts2,pnts2)
+dMat2 <- as.matrix(test)
+dMat2 <- dMat2*60
+dMat2[is.infinite(dMat2)] <- 1000
+
+##penalty based on quality of points
+objVals <- templhs[["final_obj"]]
+objVals <- max(objVals) - objVals
+
+maxTime <- 11L ##hours
+## time per transect
+plotTime <- 45L ##mins
+temp <- dMat2[1:10,1:10]
+maxDist <- sum(temp[upper.tri(temp)])
+minPen <- maxDist * 2
+maxPen <- maxDist * 5
+objVals <- scales::rescale(objVals, to = c(minPen,maxPen))
+objVals <- as.integer(objVals)
+
+n = 10
+ndays <- 2L
+indStart <- as.integer(rep(n,ndays))
+##run vehicle routing problem from python script
+## GCS is global span cost coefficient
+vrp <- py_mTSP(dat = dMat2,num_days = ndays, start = indStart, end = indStart, 
+               max_cost = maxTime*60L, plot_time = plotTime, penalty =  objVals, arbDepot = F, GSC = 8L)
+result <- vrp[[1]]
+
+## create spatial paths
+paths <- foreach(j = 0:(length(result)-1), .combine = rbind) %do% {
+  if(length(result[[as.character(j)]]) > 2){
+    cat("Drop site",j,"...\n")
+    p1 <- result[[as.character(j)]]+1
+    out <- foreach(i = 1:(length(p1)-1), .combine = rbind) %do% {
+      temp1 <- pnts[p1[i],]
+      temp2 <- pnts[p1[i+1],]
+      temp3 <- shortestPath(tr1,st_coordinates(temp1),
+                            st_coordinates(temp2),output = "SpatialLines") %>% st_as_sf()
+      temp3$Segment = i
+      temp3
+    }
+    out$DropSite = j
+    out
+  }
+  
+}
+
+paths <- st_transform(paths, 3005)
+st_write(paths, dsn = "BoundaryTSP.gpkg", layer = "Paths", append = T, driver = "GPKG")  
+
+## label points
+p2 <- pnts
+p2$PID <- seq_along(p2$name)
+p2 <- p2[,"PID"]
+p2$DropLoc <- NA
+p2$Order <- NA
+for(i in 0:(length(result)-1)){
+  p1 <- result[[as.character(i)]]+1
+  p1 <- p1[-1]
+  p2$DropLoc[p1] <- i
+  p2$Order[p1] <- 1:length(p1)
+}
+p2 <- st_transform(p2, 3005)
+st_write(p2, dsn = "BoundaryTSP.gpkg",layer = "Points", append = T,overwrite = T, driver = "GPKG")
