@@ -11,7 +11,7 @@ from ortools.constraint_solver import routing_enums_pb2
 from ortools.constraint_solver import pywrapcp
 import numpy as np
 
-def py_mTSP(dat, num_days, start, end, max_cost, plot_time, penalty, arbDepot, GSC = 10):
+def py_mTSP(dat, num_days, start, end, max_cost, plot_time, duplicates, penalty, arbDepot, GSC = 10):
     dat2 = dat.copy()
     # if(arbDepot):
     #     temp = start.append(max(start)+1)
@@ -38,7 +38,7 @@ def py_mTSP(dat, num_days, start, end, max_cost, plot_time, penalty, arbDepot, G
             add = 0
         else:
             add = plot_time
-        print(str(from_node)+ " " +str(to_node))
+        ##print(str(from_node)+ " " +str(to_node))
         return data['distance_matrix'][from_node][to_node]+add
 
     transit_callback_index = routing.RegisterTransitCallback(distance_callback)
@@ -56,8 +56,15 @@ def py_mTSP(dat, num_days, start, end, max_cost, plot_time, penalty, arbDepot, G
         dimension_name)
         
     # Allow to drop nodes.
-    for node in range(len(penalty)):
-        routing.AddDisjunction([manager.NodeToIndex(node)], penalty[node])
+    for i in range(len(penalty)):
+        tempNd = duplicates[i]
+        if(isinstance(tempNd,int)):
+            tempNd = [tempNd]
+        tempIx = []
+        for j in range(len(tempNd)):
+            tempIx.append(manager.NodeToIndex(tempNd[j]))
+        
+        routing.AddDisjunction(tempIx, penalty[i])
 
     distance_dimension = routing.GetDimensionOrDie(dimension_name)
 
