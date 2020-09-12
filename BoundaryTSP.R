@@ -10,7 +10,7 @@ library(reticulate)
 library(here)
 
 source("FastCLHS_R.R")
-source_python("./mTSP.py")
+source_python("./mTSP_road.py")
 
 datLocGit <- here("InputData/Boundary") ## Data
 covLoc <- here("BoundaryCovs") ## Too big for git data
@@ -49,7 +49,6 @@ proj4string(alt) <- "+init=epsg:3005"
 alt2 <- projectRaster(alt,rdsRast,method = 'ngb')
 altAll <- merge(rdsRast, alt2)
 
-
 trFn <- function(x){
   if(x[1] > 500 & x[2] > 500){
     x[1]-x[2]
@@ -68,7 +67,7 @@ adj <- adj[!adj[,2] %in% rdIdx ,]
 tr <- transition(altAll,trFn,directions = 8, symm = F) ##altDiff and speed (km/h)
 
 tr1 <- geoCorrection(tr) ##divided by 25 - slope and conductance (km/h/m)
-tr1[adj] <- 0.25*(6*exp(-3.5*abs(tr1[adj] + 0.08))) ##tobler's hiking function * 3/5 - gives km/h
+tr1[adj] <- (3/5)*(6*exp(-3.5*abs(tr1[adj] + 0.08))) ##tobler's hiking function * 3/5 - gives km/h
 tr1 <- tr1*1000 ##now roads are correct conductance (h/m), and walking in m/h
 tr2 <- geoCorrection(tr1) ##have to geocorrect this part again
 tr1[adj] <- tr2[adj] ##tr1 values are now all conductance in h/metre
@@ -113,7 +112,7 @@ s <- s[!is.na(s$DAH) & !is.infinite(s$cost),]
 s <- st_as_sf(s)
 temp <- st_drop_geometry(s) %>% as.matrix()
 templhs <- c_clhs(temp,size = 10, include = NULL, 
-                     i_cost = 5, iter = 20000)
+                   i_cost = 5, iter = 20000)
 
 idx <- templhs$indeces
 pnts <- s[idx,]
@@ -148,51 +147,52 @@ pntsTSP <- foreach(lhsPnt = 1:nrow(pnts), .combine = rbind) %do% {
   trTemp <- create_acost(altAll = altSmall)
   acostTemp <- accCost(trTemp,as(pnt,"Spatial"))
   rdsTemp <- rdsAll[pntBuff,]
-  rdsTemp$RdNum <- NA
-  ints <- st_intersects(rdsTemp,sparse = F)
-  
-  ### figure out connected roads
-  flag1 <- T
-  count <- 0
-  idxAll <- 1:ncol(ints)
-  idxOpts <- idxAll
-  while(flag1){
-    idx <- which(ints[,idxOpts[1]])
-    flag2 <- T
-    if(length(idx) > 1){
-      while(flag2){
-        temp <- which(apply(ints[,idx], 1, FUN = function(x){any(x)}))
-        if(setequal(idx,temp)){
-          flag2 <- F
+  if(nrow(rdsTemp) > 0){
+    rdsTemp$RdNum <- NA
+    ints <- st_intersects(rdsTemp,sparse = F)
+    
+    ### figure out connected roads
+    flag1 <- T
+    count <- 0
+    idxAll <- 1:ncol(ints)
+    idxOpts <- idxAll
+    while(flag1){
+      idx <- which(ints[,idxOpts[1]])
+      flag2 <- T
+      if(length(idx) > 1){
+        while(flag2){
+          temp <- which(apply(ints[,idx], 1, FUN = function(x){any(x)}))
+          if(setequal(idx,temp)){
+            flag2 <- F
+          }
+          idx <- union(idx,temp)
         }
-        idx <- union(idx,temp)
+      }
+      rdsTemp$RdNum[idx] <- count
+      count <- count+1
+      idxOpts <- setdiff(idxOpts,idx)
+      if(length(idxOpts) == 0){
+        flag1 <- F
       }
     }
-    rdsTemp$RdNum[idx] <- count
-    count <- count+1
-    idxOpts <- setdiff(idxOpts,idx)
-    if(length(idxOpts) == 0){
-      flag1 <- F
+    
+    plot(acostTemp)
+    plot(rdsTemp, add = T)
+    rdPnts <- foreach(rdNum = unique(rdsTemp$RdNum), .combine = rbind) %do% {
+      rds <- rdsTemp[rdsTemp$RdNum == rdNum,]
+      rds <- st_buffer(rds, dist = 35)
+      acost2 <- mask(acostTemp, rds)
+      acost2 <- trim(acost2)
+      minCost <- min(values(acost2), na.rm = T)
+      cPnts <- rasterToPoints(acost2, fun = function(x){x == minCost}, spatial = T)
+      cPnts
     }
+    rdPnts <- st_as_sf(rdPnts)
+    rdPnts$LHSpnt = lhsPnt
+    rdPnts
   }
   
-  plot(acostTemp)
-  plot(rdsTemp, add = T)
-  rdPnts <- foreach(rdNum = unique(rdsTemp$RdNum), .combine = rbind) %do% {
-    rds <- rdsTemp[rdsTemp$RdNum == rdNum,]
-    rds <- st_buffer(rds, dist = 35)
-    acost2 <- mask(acostTemp, rds)
-    acost2 <- trim(acost2)
-    minCost <- min(values(acost2), na.rm = T)
-    cPnts <- rasterToPoints(acost2, fun = function(x){x == minCost}, spatial = T)
-    cPnts
-  }
-  rdPnts <- st_as_sf(rdPnts)
-  rdPnts$LHSpnt = lhsPnt
-  rdPnts
 }
-
-
 
 p2 <- pntsTSP
 pnts <- pntsTSP[,"LHSpnt"]
@@ -226,7 +226,7 @@ for(i in 1:nPoints){
 }
 
 dupPoints <- list()
-for(ix in unique(pntsTSP$LHSpnt)){
+for(ix in unique(as.character(pntsTSP$LHSpnt))){
   temp <- rownames(pntsTSP[pntsTSP$LHSpnt == ix,]) %>% as.numeric()
   temp <- as.integer(temp - 1)
   dupPoints[[ix]] <- temp
@@ -239,7 +239,7 @@ objVals <- max(objVals) - objVals
 maxTime <- 11L ##hours
 ## time per transect
 plotTime <- 40L ##mins
-temp <- dMat2[1:10,1:10]
+temp <- dMat2[1:length(dupPoints),length(dupPoints)]
 maxDist <- sum(temp[upper.tri(temp)])
 minPen <- maxDist * 2
 maxPen <- maxDist * 5
