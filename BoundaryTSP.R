@@ -116,7 +116,7 @@ templhs <- c_clhs(temp,size = 10, include = NULL,
 
 idx <- templhs$indeces
 pnts <- s[idx,]
-plot(acost2)
+plot(acost)
 plot(pnts, add = T)
 spPnts <- as(pnts,"Spatial")
 origPnts <- pnts
@@ -231,15 +231,16 @@ for(ix in unique(as.character(pntsTSP$LHSpnt))){
   temp <- as.integer(temp - 1)
   dupPoints[[ix]] <- temp
 }
-
+pntsUse <- as.numeric(names(dupPoints))
+names(dupPoints) <- 0:(length(pntsUse)-1)
 ##penalty based on quality of points
-objVals <- templhs[["final_obj"]]
+objVals <- templhs[["final_obj"]][pntsUse]
 objVals <- max(objVals) - objVals
 
 maxTime <- 11L ##hours
 ## time per transect
 plotTime <- 40L ##mins
-temp <- dMat2[1:length(dupPoints),length(dupPoints)]
+temp <- dMat2[1:length(dupPoints),1:length(dupPoints)]
 maxDist <- sum(temp[upper.tri(temp)])
 minPen <- maxDist * 2
 maxPen <- maxDist * 5
@@ -282,7 +283,7 @@ paths <- foreach(j = 0:(length(result)-1), .combine = rbind) %do% {
 }
 
 paths <- st_transform(paths, 3005)
-st_write(paths, dsn = "BoundaryTSP_Fix.gpkg", layer = "Paths", append = T, driver = "GPKG")  
+st_write(paths, dsn = "BoundaryTSP_Sep14.gpkg", layer = "Paths", append = T, driver = "GPKG")  
 
 ## label points
 idx <- templhs$indeces
@@ -299,4 +300,4 @@ for(i in 0:(length(result)-1)){
   p2$Order[p1] <- 1:length(p1)
 }
 p2 <- st_transform(p2, 3005)
-st_write(p2, dsn = "BoundaryTSP_Fix.gpkg",layer = "Points", append = T,overwrite = T, driver = "GPKG")
+st_write(p2, dsn = "BoundaryTSP_Sep14.gpkg",layer = "Points", append = T,overwrite = T, driver = "GPKG")

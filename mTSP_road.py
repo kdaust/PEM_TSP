@@ -57,7 +57,7 @@ def py_mTSP(dat, num_days, start, end, max_cost, plot_time, duplicates, penalty,
         
     # Allow to drop nodes.
     for i in range(len(penalty)):
-        tempNd = duplicates[i]
+        tempNd = duplicates[str(i)]
         if(isinstance(tempNd,int)):
             tempNd = [tempNd]
         tempIx = []
