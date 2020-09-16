@@ -1,4 +1,3 @@
-library(clhs)
 library(sf)
 library(raster)
 library(sp)
@@ -104,7 +103,7 @@ rdsAll <- rdsAll[,c("ROAD_SURFACE","ROAD_CLASS")]
 rdsAll <- rdsAll[rdsAll$ROAD_SURFACE != "overgrown",]
 colnames(rdsAll)[2] <- "road_surface"
 rds <- st_crop(rdsAll, bgc)
-rds <- st_buffer(rds, dist = 100)
+rds <- st_buffer(rds, dist = 144)
 lays <- mask(lays, rds, inverse = T)
 
 s <- sampleRegular(lays , size = 5000000, sp = TRUE) # sample raster
@@ -112,7 +111,7 @@ s <- s[!is.na(s$DAH) & !is.infinite(s$cost),]
 s <- st_as_sf(s)
 temp <- st_drop_geometry(s) %>% as.matrix()
 templhs <- c_clhs(temp,size = 10, include = NULL, 
-                   i_cost = 5, iter = 20000)
+                   i_cost = 5, iter = 10000)
 
 idx <- templhs$indeces
 pnts <- s[idx,]
@@ -283,7 +282,7 @@ paths <- foreach(j = 0:(length(result)-1), .combine = rbind) %do% {
 }
 
 paths <- st_transform(paths, 3005)
-st_write(paths, dsn = "BoundaryTSP_Sep14.gpkg", layer = "Paths", append = T, driver = "GPKG")  
+st_write(paths, dsn = "BoundaryTSP_Sep14_v3.gpkg", layer = "Paths", append = T, driver = "GPKG")  
 
 ## label points
 idx <- templhs$indeces
@@ -300,4 +299,4 @@ for(i in 0:(length(result)-1)){
   p2$Order[p1] <- 1:length(p1)
 }
 p2 <- st_transform(p2, 3005)
-st_write(p2, dsn = "BoundaryTSP_Sep14.gpkg",layer = "Points", append = T,overwrite = T, driver = "GPKG")
+st_write(p2, dsn = "BoundaryTSP_Sep14_v3.gpkg",layer = "Points", append = T,overwrite = T, driver = "GPKG")

@@ -38,7 +38,6 @@ def py_mTSP(dat, num_days, start, end, max_cost, plot_time, penalty, arbDepot, G
             add = 0
         else:
             add = plot_time
-        print(str(from_node)+ " " +str(to_node))
         return data['distance_matrix'][from_node][to_node]+add
 
     transit_callback_index = routing.RegisterTransitCallback(distance_callback)
