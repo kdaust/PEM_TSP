@@ -23,7 +23,6 @@ library(goftest)
 ```
 
 ```{r source}
-source("FastCLHS_R.R")
 source_python("./mTSP.py")
 
 ##Kolmogorov-Smirnov test
@@ -175,12 +174,12 @@ createRandom <- function(X,n){
 }
 
 createLHS <- function(X,n){
-  temp <- c_clhs(X,size = n, i_cost = NULL, iter = 5000)
+  temp <- clhs(X,size = n, cost = NULL, use.cpp = T, iter = 5000, simple = F)
   small <- as.matrix(temp$sampled_data)
   return(small)
 }
 createCCLHS <- function(X,n){
-  temp <- c_clhs(X,size = n,i_cost = ncol(X), iter = 1000)
+  temp <- clhs(X,size = n,cost = ncol(X), iter = 1000)
   small <- as.matrix(temp$sampled_data)
   return(small)
 }
@@ -195,10 +194,9 @@ createCCLHS <- function(X,n){
 # registerDoParallel(cl)
 
 collectStats <- function(X,sampleFun,nums,testFun1 = sumKSTest,testFun2 = fillTest, testFun3 = adTest){
-  test_res <- foreach(n = nums, .combine = rbind, .noexport = c("CppLHS"), 
-                    .packages = c("Rcpp","LaplacesDemon","foreach","goftest"),
-                    .export = c("c_clhs")) %dopar% {
-                      smallSet <- sampleFun(X,n)
+  test_res <- foreach(n = nums, .combine = rbind, 
+                    .packages = c("Rcpp","LaplacesDemon","foreach","goftest","clhs")) %dopar% {
+                      smallSet <- sampleFun(as.data.frame(X),n)
                       res1 <- testFun1(X[,1:6],smallSet)
                       res2 <- testFun2(X[,1:6], smallSet)
                       #res3 <- testFun3(X[,1:6], smallSet)
@@ -207,7 +205,7 @@ collectStats <- function(X,sampleFun,nums,testFun1 = sumKSTest,testFun2 = fillTe
   return(test_res)
 }
 
-nums <- round(seq(10, 800, length.out = 20))
+nums <- round(seq(10, 800, length.out = 10))
 nums <- rep(nums, each = 5)
 statsRand <- collectStats(X,createRandom,nums)
 statsRand$SType <- "Random"
@@ -216,7 +214,7 @@ statsLHS$SType <- "LHS"
 statsCCLHS <- collectStats(Xcost,createCCLHS, nums)
 statsCCLHS$SType <- "CCLHS"
 
-statsAll <- rbind(statsRand,statsLHS,statsCCLHS)
+statsAll <- rbind(statsRand,statsLHS)
 statsAll$Num <- as.factor(statsAll$Num)
 statsAll$SType <- as.factor(statsAll$SType)
 

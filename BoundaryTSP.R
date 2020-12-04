@@ -6,9 +6,9 @@ library(foreach)
 library(data.table)
 library(fasterize)
 library(reticulate)
+library(clhs)
 library(here)
 
-source("FastCLHS_R.R")
 source_python("./mTSP_road.py")
 
 datLocGit <- here("InputData/Boundary") ## Data
@@ -23,7 +23,9 @@ ancDat <- raster::stack(covars)
 proj4string(ancDat) <- "+init=epsg:3005"
 
 ###read in roads
-rdsAll <- st_read(dsn = paste0(datLocGit,"/Boundary_PEM_prep.gdb"), layer = "A2_BCGW_ROAD_ATLAS_MPAR")
+rdsAll <- rdsAll <- st_read(dsn = paste0(datLocGit,"/RoadsClippedESSFdc2.gpkg"))
+st_crs(rdsAll) <- 3005
+rdsAll$ROAD_CLASS[rdsAll$trail == 1] <- "trail"
 rdsAll <- rdsAll[,c("ROAD_SURFACE","ROAD_CLASS")]
 rdsAll <- rdsAll[rdsAll$ROAD_SURFACE != "overgrown",]
 colnames(rdsAll)[2] <- "road_surface"
@@ -37,7 +39,7 @@ rdsAll <- merge(rdsAll, rSpd, by = "road_surface", all = F)
 rdsAll <- rdsAll[,"Values"]
 allRast <- raster(rdsAll, resolution = 25)
 
-rdsAll <- st_buffer(rdsAll,dist = 35, endCapStyle = "SQUARE", joinStyle = "MITRE")
+rdsAll <- st_buffer(rdsAll,dist = 20, endCapStyle = "SQUARE", joinStyle = "MITRE")
 rdsAll <- st_cast(rdsAll, "MULTIPOLYGON")
 rdsRast <- fasterize(rdsAll, allRast, field = "Values")
 
@@ -81,14 +83,16 @@ acost <- accCost(tr1,start)
 plot(acost)
 writeRaster(acost, "TestAcost.tif", "GTiff",overwrite = T)
 
+ancDat <- crop(ancDat, acost)
 acost2 <- projectRaster(acost, ancDat)
 lays <- stack(ancDat,acost2)
 names(lays) <- layerNames
 bgc <- st_read(dsn = here("InputData/Boundary"), layer = "Boundary_BGC_dissolved")
 bgc <- bgc[bgc$MAP_LABEL == "ESSFdc2",]
-bgc <- st_cast(bgc,"POLYGON")
+bgc <- st_cast(bgc,"MULTIPOLYGON")
 bgc$ID <- seq_along(bgc$MAP_LABEL)
-bgc <- bgc[bgc$ID %in% c(1,2),]
+##bgc <- bgc[bgc$ID %in% c(1,2),]
+bgc <- st_crop(bgc,rdsAll)
 bgc <- st_buffer(bgc, dist = -144)
 maskRast <- fasterize(bgc,ancDat[[1]])
 lays <- mask(lays,maskRast)
@@ -98,25 +102,33 @@ cutblks <- st_crop(cutblks,bgc)
 cutblks <- st_buffer(cutblks,144)
 cutblkRast <- fasterize(cutblks, lays$DAH)
 lays <- mask(lays, cutblkRast, inverse = T)
-rdsAll <- st_read(dsn = paste0(datLocGit,"/Boundary_PEM_prep.gdb"), layer = "A2_BCGW_ROAD_ATLAS_MPAR")
+rdsAll <- st_read(dsn = paste0(datLocGit,"/RoadsClippedESSFdc2.gpkg"))
+st_crs(rdsAll) <- 3005
 rdsAll <- rdsAll[,c("ROAD_SURFACE","ROAD_CLASS")]
 rdsAll <- rdsAll[rdsAll$ROAD_SURFACE != "overgrown",]
 colnames(rdsAll)[2] <- "road_surface"
 rds <- st_crop(rdsAll, bgc)
 rds <- st_buffer(rds, dist = 144)
-lays <- mask(lays, rds, inverse = T)
+rds <- st_cast(rds, "MULTIPOLYGON")
+tempR <- fasterize(rds, lays$DAH)
+lays <- mask(lays, tempR, inverse = T)
+privLand <- st_read(dsn = datLocGit, layer = "Boundary_LandOwnershipRemove")
+privLand <- privLand %>% st_buffer(dist = 144) %>% st_cast("MULTIPOLYGON")
+tempR <- fasterize(privLand, lays$DAH)
+lays <- mask(lays, tempR, inverse = T)
 
 s <- sampleRegular(lays , size = 5000000, sp = TRUE) # sample raster
 s <- s[!is.na(s$DAH) & !is.infinite(s$cost),]
 s <- st_as_sf(s)
-temp <- st_drop_geometry(s) %>% as.matrix()
-templhs <- c_clhs(temp,size = 10, include = NULL, 
-                   i_cost = 5, iter = 10000)
 
-idx <- templhs$indeces
+temp <- st_drop_geometry(s)
+templhs <- clhs(temp, size = 10, cost = "cost", iter = 20000, use.cpp = T, simple = F)
+
+idx <- templhs$index_sampled
 pnts <- s[idx,]
 plot(acost)
 plot(pnts, add = T)
+st_write(pnts, dsn = "ESSFdc2L10HS.gpkg", layer = "Set2", append = T)
 spPnts <- as(pnts,"Spatial")
 origPnts <- pnts
 
@@ -194,6 +206,7 @@ pntsTSP <- foreach(lhsPnt = 1:nrow(pnts), .combine = rbind) %do% {
 }
 
 p2 <- pntsTSP
+pnts <- pnts["DAH"]
 pnts <- pntsTSP[,"LHSpnt"]
 colnames(pnts) <- c("name","geometry")
 st_geometry(pnts) <- "geometry"
@@ -233,27 +246,27 @@ for(ix in unique(as.character(pntsTSP$LHSpnt))){
 pntsUse <- as.numeric(names(dupPoints))
 names(dupPoints) <- 0:(length(pntsUse)-1)
 ##penalty based on quality of points
-objVals <- templhs[["final_obj"]][pntsUse]
+objVals <- templhs$final_obj_continuous[pntsUse]
 objVals <- max(objVals) - objVals
 
-maxTime <- 11L ##hours
+maxTime <- 12L ##hours
 ## time per transect
-plotTime <- 40L ##mins
+plotTime <- 30L ##mins
 temp <- dMat2[1:length(dupPoints),1:length(dupPoints)]
 maxDist <- sum(temp[upper.tri(temp)])
-minPen <- maxDist * 2
+minPen <- maxDist * 3
 maxPen <- maxDist * 5
 objVals <- scales::rescale(objVals, to = c(minPen,maxPen))
 objVals <- as.integer(objVals)
 
 n = nrow(dMat2)-1
-ndays <- 2L
+ndays <- as.integer(length(objVals)/4)
 indStart <- as.integer(rep(n,ndays))
 ##run vehicle routing problem from python script
 ## GCS is global span cost coefficient
 vrp <- py_mTSP(dat = dMat2,num_days = ndays, start = indStart, end = indStart, 
                max_cost = maxTime*60L, plot_time = plotTime, duplicates = dupPoints,
-               penalty =  objVals, arbDepot = F, GSC = 8L)
+               penalty =  objVals, arbDepot = F, GSC = 1L)
 result <- vrp[[1]]
 
 ## create spatial paths
@@ -282,10 +295,10 @@ paths <- foreach(j = 0:(length(result)-1), .combine = rbind) %do% {
 }
 
 paths <- st_transform(paths, 3005)
-st_write(paths, dsn = "BoundaryTSP_Sep14_v3.gpkg", layer = "Paths", append = T, driver = "GPKG")  
+st_write(paths, dsn = "BoundaryTSP_ESSFdc2_v2.gpkg", layer = "Paths", append = T, driver = "GPKG")  
 
 ## label points
-idx <- templhs$indeces
+idx <- templhs$index_sampled
 pnts <- s[idx,]
 p2 <- pnts
 p2$PID <- seq_along(p2$DAH)
@@ -299,4 +312,4 @@ for(i in 0:(length(result)-1)){
   p2$Order[p1] <- 1:length(p1)
 }
 p2 <- st_transform(p2, 3005)
-st_write(p2, dsn = "BoundaryTSP_Sep14_v3.gpkg",layer = "Points", append = T,overwrite = T, driver = "GPKG")
+st_write(p2, dsn = "BoundaryTSP_ESSFdc2_v2.gpkg",layer = "Points", append = T,overwrite = T, driver = "GPKG")

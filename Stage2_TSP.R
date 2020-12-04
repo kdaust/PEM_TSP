@@ -80,7 +80,7 @@ dMat2[is.infinite(dMat2)] <- 1000
 
 maxTime <- 10L ##hours
 ## time per transect
-plotTime <- 60L ##mins
+plotTime <- 45L ##mins
 temp <- dMat2[-nrow(dMat2),-ncol(dMat2)]
 maxDist <- sum(temp[upper.tri(temp)])
 pen <- as.integer(rep(maxDist * 5, nrow(p2))) ##penalty
