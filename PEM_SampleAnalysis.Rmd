@@ -20,10 +20,12 @@ library(here)
 library(LearnGeom)
 library(tidyverse)
 library(goftest)
+library(velox)
 ```
 
+The below chunk creates some generic statistical functions
+
 ```{r source}
-source("FastCLHS_R.R")
 source_python("./mTSP.py")
 
 ##Kolmogorov-Smirnov test
@@ -77,6 +79,8 @@ Tri_build <- function(id, x, y){
 } 
 ```
 
+Load data and setup covariates
+
 ```{r load data}
 datLocGit <- here("InputData") ## Data
 covLoc <- here("Covariates") ## Too big for git data
@@ -114,6 +118,8 @@ rdsAll <- as.data.table(rdsAll) %>% st_as_sf()
 start_sf <- st_read("SmithersStart.gpkg")
 start <- as(start_sf, "Spatial")
 ```
+
+This section creates the transition layer from the slope and clost surface using tobler's hiking function
 
 ```{r create cost surface}
 ##road speed
@@ -157,6 +163,11 @@ acost2 <- projectRaster(acost, ancDatSL)
 acost2 <- mask(acost2, alt)
 ancDatSL_cost <- stack(ancDatSL,acost2)
 ```
+### Simulation 1: Single point sampling
+
+For all the following simulations we're testing with random samples, LHS samples, CCLHS samples and sometimes TSP sampling (not for single points).
+
+There are different ways of testing space filling: in the below code, we use KS statistics, a simple bin fill function, and the AD test (doesn't seem to work well)
 
 ```{r single point}
 fullSet <- sampleRegular(ancDatSL, size = 100000,useGDAL = T)
@@ -167,38 +178,32 @@ fullSet <- sampleRegular(ancDatSL_cost, size = 100000,useGDAL = T)
 Xcost <- fullSet
 Xcost <- Xcost[complete.cases(Xcost),]
 
-##templhs <- c_clhs(x = X, size = 100, i_cost = NULL, iter = 10000)
-
+##functions to create sampling setups
 createRandom <- function(X,n){
   small <- sample(1:nrow(X),size = n, replace = F)
   return(X[small,])
 }
 
 createLHS <- function(X,n){
-  temp <- c_clhs(X,size = n, i_cost = NULL, iter = 5000)
+  temp <- clhs(X,size = n, cost = NULL, use.cpp = T, iter = 5000, simple = F)
   small <- as.matrix(temp$sampled_data)
   return(small)
 }
 createCCLHS <- function(X,n){
-  temp <- c_clhs(X,size = n,i_cost = ncol(X), iter = 1000)
+  temp <- clhs(X,size = n,cost = ncol(X),use.cpp = T, iter = 1000,simple = F)
   small <- as.matrix(temp$sampled_data)
   return(small)
 }
 
-# worker.init <- function(){
-#   Rcpp::sourceCpp("CppLHS.cpp")
-# }
-# 
-# require(doParallel)
-# cl <- makePSOCKcluster(detectCores()-2)
-# clusterCall(cl, worker.init)
-# registerDoParallel(cl)
+require(doParallel)
+cl <- makePSOCKcluster(detectCores()-2)
+registerDoParallel(cl)
 
-collectStats <- function(X,sampleFun,nums,testFun1 = sumKSTest,testFun2 = fillTest, testFun3 = adTest){
-  test_res <- foreach(n = nums, .combine = rbind, .noexport = c("CppLHS"), 
-                    .packages = c("Rcpp","LaplacesDemon","foreach","goftest"),
-                    .export = c("c_clhs")) %dopar% {
-                      smallSet <- sampleFun(X,n)
+##collecting stats with different space filling tests
+collectStats <- function(X,sampleFun,nums,testFun1 = sumKSTest,testFun2 = fillTest){
+  test_res <- foreach(n = nums, .combine = rbind, 
+                    .packages = c("Rcpp","LaplacesDemon","foreach","goftest","clhs")) %dopar% {
+                      smallSet <- sampleFun(as.data.frame(X),n)
                       res1 <- testFun1(X[,1:6],smallSet)
                       res2 <- testFun2(X[,1:6], smallSet)
                       #res3 <- testFun3(X[,1:6], smallSet)
@@ -207,7 +212,7 @@ collectStats <- function(X,sampleFun,nums,testFun1 = sumKSTest,testFun2 = fillTe
   return(test_res)
 }
 
-nums <- round(seq(10, 800, length.out = 20))
+nums <- round(seq(10, 800, length.out = 10))
 nums <- rep(nums, each = 5)
 statsRand <- collectStats(X,createRandom,nums)
 statsRand$SType <- "Random"
@@ -231,11 +236,12 @@ statsAll[,Norm := 1-Norm]
 ggplot(statsAll, aes(x = Num, y = Norm, fill = SType))+
   geom_boxplot()
 ```
+### Simulation 2: Transect Sampling
 
 ```{r transects}
 ancDatLL_cost <- stack(ancDatLL,acost2)
 fullSet <- sampleRegular(ancDatLL, size = 1000000,sp = T)
-X <- st_as_sf(fullSet)
+X <- st_as_sf(fullSet) ##This line takes a while, but I'm not sure of an alternative
 X <- X[!is.na(X$X25m_DAH_3Class),]
 fullSL <- sampleRegular(ancDatSL, size = 1000000,GDAL = T)
 fullSL <- fullSL[complete.cases(fullSL),]
@@ -246,10 +252,12 @@ Xcost <- Xcost[!is.na(Xcost$X25m_DAH_3Class),]
 Xcost <- Xcost[!is.infinite(Xcost$layer),]
 ancDatVL <- velox(ancDatSL) ##create velox object
 
+
+###create LHS transect sample, use clhs to sample transects
 createLHS <- function(X,n,ancDat){
-  xMat <- as.matrix(st_drop_geometry(X))
-  temp <- c_clhs(xMat,size = n,i_cost = NULL,iter = 5000)
-  dat <- X[temp$indeces,]
+  xMat <- st_drop_geometry(X)
+  temp <- clhs(xMat,size = n,cost = NULL,iter = 5000,use.cpp = T,simple = F)
+  dat <- X[temp$index_samples,]
   small <- foreach(j = 1:nrow(dat),.combine = rbind) %do% {
     tri <- Tri_build(id = j, x = st_coordinates(dat[j,])[1],y = st_coordinates(dat[j,])[2])
     tempDat <- ancDat$extract(tri)
@@ -257,15 +265,16 @@ createLHS <- function(X,n,ancDat){
     tempDat
   }
   small <- small[complete.cases(small),]
-  sl_lhs <- c_clhs(small, size = 25*n, iter = 5000)
+  sl_lhs <- clhs(small, size = 25*n, iter = 5000,use.cpp = T,simple = F)
   temp <- sl_lhs$sampled_data
   return(temp)
 }
 
+##create cclhs sample, extract points @ 30m intervals
 createCCLHS_30m <- function(X,n,ancDat){
-  xMat <- as.matrix(st_drop_geometry(X))
-  temp <- c_clhs(xMat,size = n,i_cost = ncol(xMat),iter = 5000)
-  dat <- X[temp$indeces,]
+  xMat <- st_drop_geometry(X)
+  temp <- clhs(xMat,size = n,cost = ncol(xMat),iter = 5000,use.cpp = T,simple = F)
+  dat <- X[temp$index_samples,]
   small <- foreach(j = 1:nrow(dat),.combine = rbind) %do% {
     tri <- Tri_build(id = j, x = st_coordinates(dat[j,])[1],y = st_coordinates(dat[j,])[2])
     tPs <- st_sample(tri, size = 25, type = "regular")
@@ -279,10 +288,11 @@ createCCLHS_30m <- function(X,n,ancDat){
   return(temp)
 }
 
+##create cclhs transects, sample using lhs
 createCCLHS <- function(X,n,ancDat){
-  xMat <- as.matrix(st_drop_geometry(X))
-  temp <- c_clhs(xMat,size = n,i_cost = ncol(xMat),iter = 5000)
-  dat <- X[temp$indeces,]
+  xMat <- st_drop_geometry(X)
+  temp <- clhs(xMat,size = n,cost = ncol(xMat),iter = 5000,use.cpp = T,simple = F)
+  dat <- X[temp$index_samples,]
   small <- foreach(j = 1:nrow(dat),.combine = rbind) %do% {
     tri <- Tri_build(id = j, x = st_coordinates(dat[j,])[1],y = st_coordinates(dat[j,])[2])
     tempDat <- ancDat$extract(tri)
@@ -290,10 +300,65 @@ createCCLHS <- function(X,n,ancDat){
     tempDat
   }
   small <- small[complete.cases(small),]
-  sl_lhs <- c_clhs(small, size = 25*n, iter = 5000)
+  sl_lhs <- clhs(small, size = 25*n, iter = 5000,use.cpp = T,simple = F)
   temp <- sl_lhs$sampled_data
   return(temp)
 }
+
+##function to run simulations
+collectStats <- function(X,sampleFun,nums,testFun1 = sumKSTest,testFun2 = fillTest,ancDat){
+  pkgs <- c("Rcpp","LaplacesDemon", "foreach","sf",
+          "raster","LearnGeom","dplyr","reticulate","gdistance","scales","velox")
+  test_res <- foreach(n = nums, .combine = rbind, .packages = pkgs,
+                    .export = c("Tri_build","fullSL","start_sf","tr1")) %dopar% { #
+                      #reticulate::source_python("mTSP.py")
+                      smallSet <- sampleFun(X,n,ancDat)
+                      smallSet <- smallSet[complete.cases(smallSet),]
+                      if(nrow(smallSet) > 1){
+                        res1 <- testFun1(fullSL,smallSet)
+                        res2 <- testFun2(fullSL,smallSet)
+                        data.frame(Num = n,KS = res1, fillQual = res2)
+                      }else{
+                        NULL
+                      }
+                      
+                    }
+  return(test_res)
+}
+
+nums <- round(seq(5, 80, length.out = 20))
+nums <- rep(nums, each = 10)
+statsLHS_trans <- collectStats(X,createLHS,nums,ancDat = ancDatVL)
+statsLHS_trans$SType = "LHS"
+fwrite(statsLHS_trans, "LHSNumSave.csv")
+statsCCLHS_trans <- collectStats(Xcost,createCCLHS,nums, ancDat = ancDatVL)
+statsCCLHS_trans$SType <- "CCLHS"
+fwrite(statsCCLHS_trans, "CCLHSNumSave.csv")
+statsTSP_trans <- collectStats(Xcost, createTSP, nums, ancDat = ancDatVL)
+statsTSP_trans$SType <- "TSP"
+fwrite(statsTSP_trans, "TSPNumSave.csv")
+statsCCLHS_30m <- collectStats(Xcost, createCCLHS_30m, nums, ancDat = ancDatSL)
+statsCCLHS_30m$SType <- "CCLHSReg"
+
+statsAll <- rbind(statsLHS_trans,statsCCLHS_trans,statsTSP_trans)
+statsAll$Num <- as.factor(statsAll$Num)
+statsAll$SType <- as.factor(statsAll$SType)
+ggplot(statsAll, aes(x = Num, y = KS, fill = SType))+
+  geom_boxplot()
+ggplot(statsAll, aes(x = Num, y = fillQual, fill = SType))+
+  geom_boxplot()
+
+statsComp <- rbind(statsCCLHS_trans,statsCCLHS_30m)
+statsComp$SType <- as.factor(statsComp$SType)
+statsComp$Num <- as.factor(statsComp$Num)
+ggplot(statsComp, aes(x = Num, y = KS, fill = SType))+
+  geom_boxplot()
+
+ggplot(statsComp, aes(x = Num, y = fillQual, fill = SType))+
+  geom_boxplot()
+```
+
+```{r}
 
 createTSP <- function(X,n,ancDat){
   xMat <- as.matrix(st_drop_geometry(X))
@@ -364,57 +429,7 @@ cl <- makePSOCKcluster(detectCores()-2)
 clusterCall(cl, worker.init)
 registerDoParallel(cl)
 
-collectStats <- function(X,sampleFun,nums,testFun1 = sumKSTest,testFun2 = fillTest,ancDat){
-  pkgs <- c("Rcpp","LaplacesDemon", "foreach","sf",
-          "raster","LearnGeom","dplyr","reticulate","gdistance","scales","velox")
-  test_res <- foreach(n = nums, .combine = rbind, .noexport = c("CppLHS"), 
-                      .packages = pkgs,
-                    .export = c("c_clhs","Tri_build","fullSL","start_sf","tr1")) %dopar% { #
-                      reticulate::source_python("mTSP.py")
-                      smallSet <- sampleFun(X,n,ancDat)
-                      smallSet <- smallSet[complete.cases(smallSet),]
-                      if(nrow(smallSet) > 1){
-                        res1 <- testFun1(fullSL,smallSet)
-                        res2 <- testFun2(fullSL,smallSet)
-                        data.frame(Num = n,KS = res1, fillQual = res2)
-                      }else{
-                        NULL
-                      }
-                      
-                    }
-  return(test_res)
-}
 
-nums <- round(seq(5, 80, length.out = 20))
-nums <- rep(nums, each = 10)
-statsLHS_trans <- collectStats(X,createLHS,nums,ancDat = ancDatVL)
-statsLHS_trans$SType = "LHS"
-fwrite(statsLHS_trans, "LHSNumSave.csv")
-statsCCLHS_trans <- collectStats(Xcost,createCCLHS,nums, ancDat = ancDatVL)
-statsCCLHS_trans$SType <- "CCLHS"
-fwrite(statsCCLHS_trans, "CCLHSNumSave.csv")
-statsTSP_trans <- collectStats(Xcost, createTSP, nums, ancDat = ancDatVL)
-statsTSP_trans$SType <- "TSP"
-fwrite(statsTSP_trans, "TSPNumSave.csv")
-statsCCLHS_30m <- collectStats(Xcost, createCCLHS_30m, nums, ancDat = ancDatSL)
-statsCCLHS_30m$SType <- "CCLHSReg"
-
-statsAll <- rbind(statsLHS_trans,statsCCLHS_trans,statsTSP_trans)
-statsAll$Num <- as.factor(statsAll$Num)
-statsAll$SType <- as.factor(statsAll$SType)
-ggplot(statsAll, aes(x = Num, y = KS, fill = SType))+
-  geom_boxplot()
-ggplot(statsAll, aes(x = Num, y = fillQual, fill = SType))+
-  geom_boxplot()
-
-statsComp <- rbind(statsCCLHS_trans,statsCCLHS_30m)
-statsComp$SType <- as.factor(statsComp$SType)
-statsComp$Num <- as.factor(statsComp$Num)
-ggplot(statsComp, aes(x = Num, y = KS, fill = SType))+
-  geom_boxplot()
-
-ggplot(statsComp, aes(x = Num, y = fillQual, fill = SType))+
-  geom_boxplot()
 
 
 ```

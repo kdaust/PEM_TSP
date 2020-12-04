@@ -9,12 +9,11 @@ library(fasterize)
 library(reticulate)
 library(here)
 
-Rcpp::sourceCpp("CppCLHS.cpp")
 source("FastCLHS_R.R")
 source_python("./mTSP.py")
   
-datLocGit <- here("InputData") ## Data
-covLoc <- here("Covariates") ## Too big for git data
+datLocGit <- here("InputData/Boundary") ## Data
+covLoc <- here("BoundaryCovs") ## Too big for git data
 ### landscape levels covariates
 covars <- paste(covLoc, c("25m_DAH_3Class.tif","25m_LandformClass_Default_Seive4.tif",
                           "25m_MRVBF_Classified_IS64Low6Up2.tif","dem.tif"), sep = "/")# ,"DEM_25m.tif"
@@ -22,10 +21,6 @@ layerNames <- c("DAH","LFC","MRVBF","DEM","cost") ##need to change this if you c
 ancDat <- raster::stack(covars)
 proj4string(ancDat) <- "+init=epsg:3005"
 
-# read in slope data
-slope_raster <-  grep("^slope", list.files(covLoc))
-slope <- raster(list.files(covLoc, full.name = TRUE)[slope_raster])
-proj4string(slope) <- "+init=epsg:3005"
 
 ## dem for transtion layer
 alt <- raster(paste0(covLoc, "/dem.tif"))
