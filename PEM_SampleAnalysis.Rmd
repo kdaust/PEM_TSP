@@ -240,13 +240,13 @@ ggplot(statsAll, aes(x = Num, y = Norm, fill = SType))+
 
 ```{r transects}
 ancDatLL_cost <- stack(ancDatLL,acost2)
-fullSet <- sampleRegular(ancDatLL, size = 1000000,sp = T)
+fullSet <- sampleRegular(ancDatLL, size = 100000,sp = T)
 X <- st_as_sf(fullSet) ##This line takes a while, but I'm not sure of an alternative
 X <- X[!is.na(X$X25m_DAH_3Class),]
-fullSL <- sampleRegular(ancDatSL, size = 1000000,GDAL = T)
+fullSL <- sampleRegular(ancDatSL, size = 100000,GDAL = T)
 fullSL <- fullSL[complete.cases(fullSL),]
 
-fullSet <- sampleRegular(ancDatLL_cost, size = 1000000,sp = T)
+fullSet <- sampleRegular(ancDatLL_cost, size = 100000,sp = T)
 Xcost <- st_as_sf(fullSet)
 Xcost <- Xcost[!is.na(Xcost$X25m_DAH_3Class),]
 Xcost <- Xcost[!is.infinite(Xcost$layer),]
@@ -265,7 +265,7 @@ createLHS <- function(X,n,ancDat){
     tempDat
   }
   small <- small[complete.cases(small),]
-  sl_lhs <- clhs(small, size = 25*n, iter = 5000,use.cpp = T,simple = F)
+  sl_lhs <- clhs(as.data.frame(small), size = 25*n, iter = 5000,use.cpp = T,simple = F)
   temp <- sl_lhs$sampled_data
   return(temp)
 }
@@ -300,7 +300,7 @@ createCCLHS <- function(X,n,ancDat){
     tempDat
   }
   small <- small[complete.cases(small),]
-  sl_lhs <- clhs(small, size = 25*n, iter = 5000,use.cpp = T,simple = F)
+  sl_lhs <- clhs(as.data.frame(small), size = 25*n, iter = 5000,use.cpp = T,simple = F)
   temp <- sl_lhs$sampled_data
   return(temp)
 }
@@ -330,17 +330,15 @@ nums <- round(seq(5, 80, length.out = 20))
 nums <- rep(nums, each = 10)
 statsLHS_trans <- collectStats(X,createLHS,nums,ancDat = ancDatVL)
 statsLHS_trans$SType = "LHS"
-fwrite(statsLHS_trans, "LHSNumSave.csv")
+#fwrite(statsLHS_trans, "LHSNumSave.csv")
 statsCCLHS_trans <- collectStats(Xcost,createCCLHS,nums, ancDat = ancDatVL)
 statsCCLHS_trans$SType <- "CCLHS"
-fwrite(statsCCLHS_trans, "CCLHSNumSave.csv")
-statsTSP_trans <- collectStats(Xcost, createTSP, nums, ancDat = ancDatVL)
-statsTSP_trans$SType <- "TSP"
-fwrite(statsTSP_trans, "TSPNumSave.csv")
+#fwrite(statsCCLHS_trans, "CCLHSNumSave.csv")
+
 statsCCLHS_30m <- collectStats(Xcost, createCCLHS_30m, nums, ancDat = ancDatSL)
 statsCCLHS_30m$SType <- "CCLHSReg"
 
-statsAll <- rbind(statsLHS_trans,statsCCLHS_trans,statsTSP_trans)
+statsAll <- rbind(statsLHS_trans,statsCCLHS_trans)
 statsAll$Num <- as.factor(statsAll$Num)
 statsAll$SType <- as.factor(statsAll$SType)
 ggplot(statsAll, aes(x = Num, y = KS, fill = SType))+
@@ -429,7 +427,9 @@ cl <- makePSOCKcluster(detectCores()-2)
 clusterCall(cl, worker.init)
 registerDoParallel(cl)
 
-
+statsTSP_trans <- collectStats(Xcost, createTSP, nums, ancDat = ancDatVL)
+statsTSP_trans$SType <- "TSP"
+#fwrite(statsTSP_trans, "TSPNumSave.csv")
 
 
 ```
