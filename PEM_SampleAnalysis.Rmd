@@ -21,6 +21,7 @@ library(LearnGeom)
 library(tidyverse)
 library(goftest)
 library(velox)
+
 ```
 
 The below chunk creates some generic statistical functions
