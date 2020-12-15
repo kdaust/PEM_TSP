@@ -94,12 +94,24 @@ layerNamesLL <- c("DAH","LFC","MRVBF","DEM","BEC", "cost") ##need to change this
 ancDatLL <- raster::stack(covars)
 proj4string(ancDatLL) <- "+init=epsg:3005"
 
+LL_corr <- layerStats(ancDatLL, 'pearson', na.rm=T)
+corr_matrixLL <- LL_corr$'pearson correlation coefficient'
+
 ## stand level covariates
 SLcov <- c("twi.tif","valley_depth_2.tif","tca2.tif","swi_area_mod.tif","cov.tif","tpi.tif")
 covars <- paste(covLoc, SLcov, sep = "/")
 layerNamesSl <- c("twi","valley","tca2","swi","cov","tpi") ##need to change this if you change the layers
 ancDatSL <- raster::stack(covars)
 proj4string(ancDatSL) <- "+init=epsg:3005"
+
+SL_corr <- layerStats(ancDatSL, 'pearson', na.rm=T)
+corr_matrixSL <- SL_corr$'pearson correlation coefficient'
+
+##combine layers to compare correlation
+ancDatLL2 <- projectRaster(ancDatLL, ancDatSL, method = 'ngb')
+ancDatALL <- stack(ancDatSL, ancDatLL2)
+All_corr <- layerStats(ancDatALL, 'pearson', na.rm=T)
+corr_matrixAll <- All_corr$'pearson correlation coefficient'
 
 ## dem for transtion layer
 alt <- raster(paste0(covLoc, "/dem.tif"))
@@ -172,11 +184,11 @@ For all the following simulations we're testing with random samples, LHS samples
 There are different ways of testing space filling: in the below code, we use KS statistics, a simple bin fill function, and the AD test (doesn't seem to work well)
 
 ```{r single point}
-fullSet <- sampleRegular(ancDatSL, size = 100000,useGDAL = T)
+fullSet <- sampleRegular(ancDatSL, size = 10000,useGDAL = T)
 X <- fullSet
 X <- X[complete.cases(X),]
 
-fullSet <- sampleRegular(ancDatSL_cost, size = 100000,useGDAL = T)
+fullSet <- sampleRegular(ancDatSL_cost, size = 10000,useGDAL = T)
 Xcost <- fullSet
 Xcost <- Xcost[complete.cases(Xcost),]
 
@@ -241,7 +253,7 @@ KSplot <- ggplot(statsAll, aes(x = Num, y = Norm, fill = SType))+
   scale_fill_discrete(guide = guide_legend(reverse=TRUE), name='Sample Method', labels = c('cost cLHS', 'cLHS', 'random'))+
   theme_few()
 plot(KSplot)
-ggsave(KSplot, "./Results/K-S Plot.png")
+ggsave("./Results/K-S Plot.jpeg", device = 'jpeg')
 
 binfillplot <- ggplot(statsAll, aes(x = Num, y = fill, fill = SType))+
   geom_boxplot() +
@@ -249,7 +261,7 @@ binfillplot <- ggplot(statsAll, aes(x = Num, y = fill, fill = SType))+
   scale_fill_discrete(guide = guide_legend(reverse=TRUE), name='Sample Method', labels = c('cost cLHS', 'cLHS', 'random'))+
   theme_few()
 plot(binfillplot)
-ggsave(KSplot, "./Results/Bin fill Plot.png")
+ggsave("./Results/Bin fill Plot.jpeg", device = 'jpeg')
 
 
 ```
@@ -258,18 +270,20 @@ ggsave(KSplot, "./Results/Bin fill Plot.png")
 
 Now instead of choosing single points, we use the cclhs or lhs to pick centre points, and then create a triangular transect around it, which we then sample from (either using a second clhs or just regular spacing). The below chunk simulates 3 transect scenarios: non cost-constrained clhs, using clhs to sample from transects, and cost-constrained clhs using both clhs and regular spacing for transect sampling. Note that this chunk takes a while to run and will use all your CPU resources. The time limiting part is not the clhs function, but rather extracting data from the raster stack once each transect has been created (even using Velox this takes a while).
 
-```{r transects}
+```{r set up transect simulations}
 ancDatLL_cost <- stack(ancDatLL,acost2)
-fullSet <- sampleRegular(ancDatLL, size = 100000,sp = T)
+fullSet <- sampleRegular(ancDatLL, size = 100000,sp = T) 
 X <- st_as_sf(fullSet) ##This line takes a while, but I'm not sure of an alternative
 X <- X[!is.na(X$X25m_DAH_3Class),]
-fullSL <- sampleRegular(ancDatSL, size = 100000,GDAL = T)
-fullSL <- fullSL[complete.cases(fullSL),]
+# 
+ fullSL <- sampleRegular(ancDatSL, size = 100000,GDAL = T)
+ fullSL <- fullSL[complete.cases(fullSL),]
 
 fullSet <- sampleRegular(ancDatLL_cost, size = 100000,sp = T)
 Xcost <- st_as_sf(fullSet)
 Xcost <- Xcost[!is.na(Xcost$X25m_DAH_3Class),]
 Xcost <- Xcost[!is.infinite(Xcost$layer),]
+
 ancDatVL <- velox(ancDatSL) ##create velox object
 
 ###create LHS transect sample, use clhs to sample transects
@@ -344,9 +358,11 @@ collectStats <- function(X,sampleFun,nums,testFun1 = sumKSTest,testFun2 = fillTe
                     }
   return(test_res)
 }
+```
 
-nums <- round(seq(5, 20, length.out = 3)) ##set sequence of transect number
-nums <- rep(nums, each = 2) ##replicates of each number (should be at least 5)
+```{r run simulations}
+nums <- round(seq(5, 50, length.out = 10)) ##set sequence of transect number
+nums <- rep(nums, each = 10) ##replicates of each number (should be at least 5)
 statsLHS_trans <- collectStats(X,createLHS,nums,ancDat = ancDatVL)
 statsLHS_trans$SType = "LHS"
 #fwrite(statsLHS_trans, "LHSNumSave.csv")
@@ -365,6 +381,23 @@ ggplot(statsAll, aes(x = Num, y = KS, fill = SType))+
   geom_boxplot()
 ggplot(statsAll, aes(x = Num, y = fillQual, fill = SType))+
   geom_boxplot()
+
+KS_transectPlot <- ggplot(statsAll, aes(x = Num, y = KS, fill = SType))+
+  geom_boxplot() +
+  labs(x = "Number of Transects", y= "Kolmogorov-Smirnov statistic (0 = identical)")+
+  scale_fill_discrete(guide = guide_legend(reverse=FALSE), name='Sample Method', labels = c('cLHS- cLHS resampled', 'cost cLHS - cLHS resampled', 'cost cLHS systematic resampled'))+
+  theme_few()
+plot(KS_transectPlot)
+ggsave("./Results/KS_transect_plot.jpeg", device = 'jpeg')
+
+Bfill_transectPlot <- ggplot(statsAll, aes(x = Num, y = fillQual, fill = SType))+
+  geom_boxplot() +
+  labs(x = "Number of Transects", y= "Bins remaining to be filled")+
+  scale_fill_discrete(guide = guide_legend(reverse=FALSE), name='Sample Method', labels = c('cLHS- cLHS resampled', 'cost cLHS - cLHS resampled', 'cost cLHS systematic resampled'))+
+  theme_few()
+plot(Bfill_transectPlot)
+ggsave("./Results/KS_transectPlot.jpeg", device = 'jpeg')
+
 ```
 
 This next chunk is basically the same as above but using the TSP and allowing drops. I separated it because this part takes longer, so might not want to always run it.
@@ -460,6 +493,22 @@ ggplot(statsAll, aes(x = Num, y = KS, fill = SType))+
   geom_boxplot()
 ggplot(statsAll, aes(x = Num, y = fillQual, fill = SType))+
   geom_boxplot()
+
+KS_transectPlot2 <- ggplot(statsAll, aes(x = Num, y = KS, fill = SType))+
+  geom_boxplot() +
+  labs(x = "Number of Transects", y= "Kolmogorov-Smirnov statistic (0 = identical)")+
+  scale_fill_discrete(guide = guide_legend(reverse=FALSE), name='Sample Method', labels = c('cLHS- cLHS resampled', 'cost cLHS - cLHS resampled', 'cost cLHS systematic resampled'))+
+  theme_few()
+plot(KS_transectPlot2)
+ggsave("./Results/KS_transect_plot2.jpeg", device = 'jpeg')
+
+Bfill_transectPlot2 <- ggplot(statsAll, aes(x = Num, y = fillQual, fill = SType))+
+  geom_boxplot() +
+  labs(x = "Number of Transects", y= "Bins remaining to be filled")+
+  scale_fill_discrete(guide = guide_legend(reverse=FALSE), name='Sample Method', labels = c('cLHS- cLHS resampled', 'cost cLHS - cLHS resampled', 'cost cLHS systematic resampled'))+
+  theme_few()
+plot(Bfill_transectPlot2)
+ggsave("./Results/KS_transectPlot2.jpeg", device = 'jpeg')
 ```
 
 ## Simulation 3: Sampling Time
@@ -565,8 +614,26 @@ timeAll$Cost <- timeAll$Cost/480 ##covert from minutes to 8-hour days
 
 timeAll$Num <- as.factor(timeAll$Num)
 timeAll$Type <- as.factor(timeAll$Type)
+
 ggplot(timeAll, aes(x = Num, y = Cost, fill = Type))+
   geom_boxplot()
+
+Time_plot <- ggplot(timeAll, aes(x = Num, y = Cost, fill = Type)) +
+  geom_boxplot() +
+  labs(x = "Number of Transects", y = "Time Cost to Sample Sufficient Samples") +
+  scale_fill_discrete(
+    guide = guide_legend(reverse = FALSE),
+    name = 'Sample Method',
+    labels = c(
+      'cLHS- cLHS resampled',
+      'cost cLHS - cLHS resampled',
+      'cost cLHS systematic resampled'
+    )
+  ) +
+  theme_few()
+plot(Bfill_transectPlot2)
+ggsave("./Results/KS_transectPlot2.jpeg", device = 'jpeg')
+
 ```
 
 ## Num Transects Needed
@@ -591,4 +658,14 @@ calcNumTrans <- function(type, numDat){
 }
 
 ```
+
+## Compare SS transect data to covariate space with DataExplorer
+```{r}
+SL <- fread("./InputData/Deception_Transect_SSxcovar_5m.csv")
+LL <- fread("./InputData/Deception_Transect_SSxcovar_LL.csv")
+LL <- LL %>% dplyr::select(mapunit1, mapunit2, '25m_MRVBF_', '25m_Landfo', '25m_DAH_3C')
+
+DataExplorer::create_report(LL, y = "mapunit1")
+```
+
 
