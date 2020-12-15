@@ -21,6 +21,7 @@ library(LearnGeom)
 library(tidyverse)
 library(goftest)
 library(velox)
+require(ggthemes)
 
 ```
 
@@ -120,7 +121,7 @@ start_sf <- st_read("SmithersStart.gpkg")
 start <- as(start_sf, "Spatial")
 ```
 
-This section creates the transition layer from the slope and clost surface using tobler's hiking function
+This section creates the transition layer from the slope and clost surface using Tobler's hiking function
 
 ```{r create cost surface}
 ##road speed
@@ -226,16 +227,31 @@ statsAll <- rbind(statsRand,statsLHS,statsCCLHS)
 statsAll$Num <- as.factor(statsAll$Num)
 statsAll$SType <- as.factor(statsAll$SType)
 
-ggplot(statsAll, aes(x = Num, y = KS, fill = SType))+
-  geom_boxplot()
-ggplot(statsAll, aes(x = Num, y = fill, fill = SType))+
-  geom_boxplot()
+# ggplot(statsAll, aes(x = Num, y = KS, fill = SType))+
+#   geom_boxplot()
+# ggplot(statsAll, aes(x = Num, y = fill, fill = SType))+
+#   geom_boxplot()
 
 statsAll <- as.data.table(statsAll)
 statsAll[, Norm := (KS-min(KS))/(max(KS)-min(KS))]
 statsAll[,Norm := 1-Norm]
-ggplot(statsAll, aes(x = Num, y = Norm, fill = SType))+
-  geom_boxplot()
+KSplot <- ggplot(statsAll, aes(x = Num, y = Norm, fill = SType))+
+  geom_boxplot() +
+  labs(x = "Minimum Number of Training Points", y= "Kolmogorov-Smirnov statistic")+ 
+  scale_fill_discrete(guide = guide_legend(reverse=TRUE), name='Sample Method', labels = c('cost cLHS', 'cLHS', 'random'))+
+  theme_few()
+plot(KSplot)
+ggsave(KSplot, "./Results/K-S Plot.png")
+
+binfillplot <- ggplot(statsAll, aes(x = Num, y = fill, fill = SType))+
+  geom_boxplot() +
+  labs(x = "Minimum Number of Training Points", y= "Bins remaining to be filled")+ 
+  scale_fill_discrete(guide = guide_legend(reverse=TRUE), name='Sample Method', labels = c('cost cLHS', 'cLHS', 'random'))+
+  theme_few()
+plot(binfillplot)
+ggsave(KSplot, "./Results/Bin fill Plot.png")
+
+
 ```
 ### Simulation 2: Transect Sampling
 
