@@ -253,7 +253,10 @@ ggsave(KSplot, "./Results/Bin fill Plot.png")
 
 
 ```
+
 ### Simulation 2: Transect Sampling
+
+Now instead of choosing single points, we use the cclhs or lhs to pick centre points, and then create a triangular transect around it, which we then sample from (either using a second clhs or just regular spacing). The below chunk simulates 3 transect scenarios: non cost-constrained clhs, using clhs to sample from transects, and cost-constrained clhs using both clhs and regular spacing for transect sampling. Note that this chunk takes a while to run and will use all your CPU resources. The time limiting part is not the clhs function, but rather extracting data from the raster stack once each transect has been created (even using Velox this takes a while).
 
 ```{r transects}
 ancDatLL_cost <- stack(ancDatLL,acost2)
@@ -268,7 +271,6 @@ Xcost <- st_as_sf(fullSet)
 Xcost <- Xcost[!is.na(Xcost$X25m_DAH_3Class),]
 Xcost <- Xcost[!is.infinite(Xcost$layer),]
 ancDatVL <- velox(ancDatSL) ##create velox object
-
 
 ###create LHS transect sample, use clhs to sample transects
 createLHS <- function(X,n,ancDat){
@@ -325,10 +327,10 @@ createCCLHS <- function(X,n,ancDat){
 ##function to run simulations
 collectStats <- function(X,sampleFun,nums,testFun1 = sumKSTest,testFun2 = fillTest,ancDat){
   pkgs <- c("Rcpp","LaplacesDemon", "foreach","sf",
-          "raster","LearnGeom","dplyr","reticulate","gdistance","scales","velox")
+          "raster","LearnGeom","dplyr","reticulate","gdistance","scales","velox","clhs")
   test_res <- foreach(n = nums, .combine = rbind, .packages = pkgs,
                     .export = c("Tri_build","fullSL","start_sf","tr1")) %dopar% { #
-                      #reticulate::source_python("mTSP.py")
+                      reticulate::source_python("mTSP.py")
                       smallSet <- sampleFun(X,n,ancDat)
                       smallSet <- smallSet[complete.cases(smallSet),]
                       if(nrow(smallSet) > 1){
@@ -343,8 +345,8 @@ collectStats <- function(X,sampleFun,nums,testFun1 = sumKSTest,testFun2 = fillTe
   return(test_res)
 }
 
-nums <- round(seq(5, 80, length.out = 20))
-nums <- rep(nums, each = 10)
+nums <- round(seq(5, 20, length.out = 3)) ##set sequence of transect number
+nums <- rep(nums, each = 2) ##replicates of each number (should be at least 5)
 statsLHS_trans <- collectStats(X,createLHS,nums,ancDat = ancDatVL)
 statsLHS_trans$SType = "LHS"
 #fwrite(statsLHS_trans, "LHSNumSave.csv")
@@ -355,30 +357,24 @@ statsCCLHS_trans$SType <- "CCLHS"
 statsCCLHS_30m <- collectStats(Xcost, createCCLHS_30m, nums, ancDat = ancDatSL)
 statsCCLHS_30m$SType <- "CCLHSReg"
 
-statsAll <- rbind(statsLHS_trans,statsCCLHS_trans)
+##plot
+statsAll <- rbind(statsLHS_trans,statsCCLHS_trans,statsCCLHS_30m)
 statsAll$Num <- as.factor(statsAll$Num)
 statsAll$SType <- as.factor(statsAll$SType)
 ggplot(statsAll, aes(x = Num, y = KS, fill = SType))+
   geom_boxplot()
 ggplot(statsAll, aes(x = Num, y = fillQual, fill = SType))+
   geom_boxplot()
-
-statsComp <- rbind(statsCCLHS_trans,statsCCLHS_30m)
-statsComp$SType <- as.factor(statsComp$SType)
-statsComp$Num <- as.factor(statsComp$Num)
-ggplot(statsComp, aes(x = Num, y = KS, fill = SType))+
-  geom_boxplot()
-
-ggplot(statsComp, aes(x = Num, y = fillQual, fill = SType))+
-  geom_boxplot()
 ```
 
-```{r}
+This next chunk is basically the same as above but using the TSP and allowing drops. I separated it because this part takes longer, so might not want to always run it.
 
+```{r}
+##function to make TSP
 createTSP <- function(X,n,ancDat){
-  xMat <- as.matrix(st_drop_geometry(X))
-  temp <- c_clhs(xMat,size = n,i_cost = ncol(xMat),iter = 5000)
-  dat <- X[temp$indeces,]
+  xMat <- st_drop_geometry(X)
+  temp <- clhs(xMat,size = n,cost = ncol(xMat),iter = 5000,use.cpp = T, simple = F)
+  dat <- X[temp$index_samples,]
 
   pnts <- dat
   
@@ -397,7 +393,7 @@ createTSP <- function(X,n,ancDat){
   dMat2[is.infinite(dMat2)] <- 1000
   
   ##penalty based on quality of points
-  objVals <- temp[["final_obj"]]
+  objVals <- temp$final_obj_continuous
   objVals <- max(objVals) - objVals
   
   maxTime <- 8L ##hours
@@ -430,28 +426,49 @@ createTSP <- function(X,n,ancDat){
     tempDat
   }
   small <- small[complete.cases(small),]
-  sl_lhs <- c_clhs(small, size = 25*n, iter = 5000)
+  sl_lhs <- clhs(as.data.frame(small), size = 25*n, iter = 5000,use.cpp = T, simple = F)
   temp <- sl_lhs$sampled_data
   return(temp)
 }
 
-worker.init <- function(){
-  Rcpp::sourceCpp("./CppLHS.cpp")
-}
+##run simulations
+pkgs <- c("Rcpp","LaplacesDemon", "foreach","sf",
+          "raster","LearnGeom","dplyr","reticulate","gdistance","scales","velox","clhs")
+statsTSP_trans <- foreach(n = nums, .combine = rbind, .packages = pkgs,
+                    .export = c("Tri_build","fullSL","start_sf","tr1")) %dopar% { #
+                      reticulate::source_python("mTSP.py")
+                      smallSet <- createTSP(Xcost,n,ancDatVL)
+                      smallSet <- smallSet[complete.cases(smallSet),]
+                      if(nrow(smallSet) > 1){
+                        res1 <- sumKSTest(fullSL,smallSet)
+                        res2 <- fillTest(fullSL,smallSet)
+                        data.frame(Num = n,KS = res1, fillQual = res2)
+                      }else{
+                        NULL
+                      }
+                      
+                }
 
-require(doParallel)
-cl <- makePSOCKcluster(detectCores()-2)
-clusterCall(cl, worker.init)
-registerDoParallel(cl)
-
-statsTSP_trans <- collectStats(Xcost, createTSP, nums, ancDat = ancDatVL)
 statsTSP_trans$SType <- "TSP"
 #fwrite(statsTSP_trans, "TSPNumSave.csv")
 
-
+##combine with above chunk
+statsAll <- rbind(statsLHS_trans,statsCCLHS_trans,statsCCLHS_30m,statsTSP_trans)
+statsAll$Num <- as.factor(statsAll$Num)
+statsAll$SType <- as.factor(statsAll$SType)
+ggplot(statsAll, aes(x = Num, y = KS, fill = SType))+
+  geom_boxplot()
+ggplot(statsAll, aes(x = Num, y = fillQual, fill = SType))+
+  geom_boxplot()
 ```
 
+## Simulation 3: Sampling Time
+
+The previous chunks investigated how variable space filling changed with different sampling strategies. We now apply the same process, but collect results on the amount of time each plan would take (as determined by the TSP). We use similar sampling plans as in the above chunks: cost-constrained clhs, regular clhs, and TSP (same as cost-constrained clhs, but allowing dropped sites). As above, the simulation runs each scenario with increasing numbers of transects and multiple replications at each level.
+
 ```{r time cost}
+
+##create TSP to calculate time
 calcCost <- function(pnts,objVals,dropAllowed){
   n = nrow(pnts)
   p2 <- st_as_sf(pnts)
@@ -499,30 +516,32 @@ calcCost <- function(pnts,objVals,dropAllowed){
   return(totTime)
 }
 
+## regular clhs
 timeLHS <- function(X,n){
-  xMat <- as.matrix(st_drop_geometry(X))
-  temp <- c_clhs(xMat,size = n,i_cost = NULL,iter = 5000)
+  xMat <- st_drop_geometry(X)
+  temp <- clhs(xMat,size = n,cost = NULL,iter = 5000,use.cpp = T,simple = F)
   return(temp)
 }
 
+## cost_constrained clhs
 timeCCLHS <- function(X,n){
-  xMat <- as.matrix(st_drop_geometry(X))
-  temp <- c_clhs(xMat,size = n,i_cost = ncol(xMat),iter = 5000)
+  xMat <- st_drop_geometry(X)
+  temp <- clhs(xMat,size = n,cost = ncol(xMat),iter = 5000,use.cpp = T,simple = F)
   return(temp)
 }
 
-collectTime <- function(X,sampleFun,nsample, reps, dropAllowed){
+##function to run simulations
+collectTime <- function(X,sampleFun, num, dropAllowed){
   pkgs <- c("Rcpp","LaplacesDemon", "foreach","sf",
-          "raster","LearnGeom","dplyr","reticulate","gdistance","scales")
-  test_res <- foreach(n = 1:reps, .combine = rbind, .noexport = c("CppLHS"), 
-                      .packages = pkgs,
-                    .export = c("c_clhs","start_sf","tr1", "calcCost")) %dopar% { #
+          "raster","LearnGeom","dplyr","reticulate","gdistance","scales","clhs")
+  test_res <- foreach(n = num, .combine = rbind, .packages = pkgs,
+                    .export = c("start_sf","tr1", "calcCost")) %dopar% { #
                       reticulate::source_python("mTSP.py")
-                      templhs <- sampleFun(X,nsample)
-                      dat <- X[templhs$indeces,]
+                      templhs <- sampleFun(X,n)
+                      dat <- X[templhs$index_samples,]
                       if(nrow(dat) > 1){
-                        time <- calcCost(dat,templhs$final_obj,dropAllowed)
-                        data.frame(Rep = n, Cost = time)
+                        time <- calcCost(dat,templhs$final_obj_continuous,dropAllowed)
+                        data.frame(Num = n, Cost = time)
                       }else{
                         NULL
                       }
@@ -531,6 +550,30 @@ collectTime <- function(X,sampleFun,nsample, reps, dropAllowed){
   return(test_res)
 }
 
+trans <- seq(5,60,by = 5) ##numbers of transects
+trans <- rep(trans,each = 5) ##replications at each level
+
+LHSTime <- collectTime(X,timeLHS,num = trans, dropAllowed = F)
+LHSTime$Type = "LHS"
+CCLHSTime <- collectTime(Xcost,timeCCLHS,num = trans, dropAllowed = F)
+CCLHSTime$Type = "CCLHS"
+TSPTime <- collectTime(Xcost, timeCCLHS, num = trans, dropAllowed = T)
+TSPTime$Type = "TSP"
+
+timeAll <- rbind(LHSTime,CCLHSTime,TSPTime)
+timeAll$Cost <- timeAll$Cost/480 ##covert from minutes to 8-hour days
+
+timeAll$Num <- as.factor(timeAll$Num)
+timeAll$Type <- as.factor(timeAll$Type)
+ggplot(timeAll, aes(x = Num, y = Cost, fill = Type))+
+  geom_boxplot()
+```
+
+## Num Transects Needed
+
+Another possibility for investigating sampling cost is running the code above, but instead of using increasing numbers of transects, fixing the number at the 90% variable space filling as determine by the previous simulations. The function below uses the simulation data from the above chunks (statsAll) and returns the estimated number of transects needed to reach 90% space filling. Note that the function will be inaccurate if you only simulated small numbers of transects.
+
+```{r num}
 numDat <- data.table(statsAll)
 
 calcNumTrans <- function(type, numDat){
@@ -547,15 +590,5 @@ calcNumTrans <- function(type, numDat){
   return(numTrans)
 }
 
-LHSTime <- collectTime(X,timeLHS,nsample = calcNumTrans("LHS",numDat),reps = 14, dropAllowed = F)
-LHSTime$Type = "LHS"
-CCLHSTime <- collectTime(Xcost,timeCCLHS,nsample = calcNumTrans("CCLHS",numDat),reps = 14, dropAllowed = F)
-CCLHSTime$Type = "CCLHS"
-TSPTime <- collectTime(Xcost, timeCCLHS, nsample = calcNumTrans("TSP",numDat), reps = 14, dropAllowed = T)
-TSPTime$Type = "TSP"
-
-timeAll <- rbind(LHSTime,CCLHSTime,TSPTime)
-timeAll$Cost <- timeAll$Cost/480
-boxplot(Cost ~ Type, data = timeAll)
 ```
 
