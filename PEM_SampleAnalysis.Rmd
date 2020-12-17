@@ -317,7 +317,7 @@ createLHS <- function(X,n,ancDat){
     tempDat
   }
   small <- small[complete.cases(small),]
-  sl_lhs <- clhs(as.data.frame(small), size = 25*n, iter = 5000,use.cpp = T,simple = F)
+  sl_lhs <- clhs(as.data.frame(small), size = 12*n, iter = 5000,use.cpp = T,simple = F)
   temp <- sl_lhs$sampled_data
   return(temp)
 }
@@ -329,7 +329,7 @@ createCCLHS_30m <- function(X,n,ancDat){
   dat <- X[temp$index_samples,]
   small <- foreach(j = 1:nrow(dat),.combine = rbind) %do% {
     tri <- Tri_build(id = j, x = st_coordinates(dat[j,])[1],y = st_coordinates(dat[j,])[2])
-    tPs <- st_sample(tri, size = 25, type = "regular")
+    tPs <- st_sample(tri, size = 12, type = "regular")
     temp <- suppressWarnings(st_sf(data.frame(id = j, geometry = tPs)) %>%
        st_cast("POINT"))
     temp
@@ -353,7 +353,7 @@ createCCLHS <- function(X,n,ancDat){
     tempDat
   }
   small <- small[complete.cases(small),]
-  sl_lhs <- clhs(as.data.frame(small), size = 25*n, iter = 5000,use.cpp = T,simple = F)
+  sl_lhs <- clhs(as.data.frame(small), size = 12*n, iter = 5000,use.cpp = T,simple = F)
   temp <- sl_lhs$sampled_data
   return(temp)
 }
@@ -381,8 +381,9 @@ collectStats <- function(X,sampleFun,nums,testFun1 = sumKSTestTransect,testFun2 
 ```
 
 ```{r run simulations}
-nums <- round(seq(5, 50, length.out = 5)) ##set sequence of transect number
-nums <- rep(nums, each = 1) ##replicates of each number (should be at least 5)
+nums <- round(seq(5, 50, length.out = 3)) ##set sequence of transect number
+nums <- rep(nums, each = 5) ##replicates of each number (should be at least 5)
+
 statsLHS_trans <- collectStats(X,createLHS,nums,ancDat = ancDatVL)
 statsLHS_trans$SType = "LHS"
 #fwrite(statsLHS_trans, "LHSNumSave.csv")
@@ -418,6 +419,8 @@ Bfill_transectPlot <- ggplot(statsAll, aes(x = Num, y = fillQual, fill = SType))
 plot(Bfill_transectPlot)
 ggsave("./Results/KS_transectPlot.jpeg", device = 'jpeg')
 
+# smallSet <- as.matrix(smallSet)
+# test <- cramer.test(x = fullSL,y = smallSet, just.statistic = T)
 ```
 
 This next chunk is basically the same as above but using the TSP and allowing drops. I separated it because this part takes longer, so might not want to always run it.
@@ -479,7 +482,7 @@ createTSP <- function(X,n,ancDat){
     tempDat
   }
   small <- small[complete.cases(small),]
-  sl_lhs <- clhs(as.data.frame(small), size = 25*n, iter = 5000,use.cpp = T, simple = F)
+  sl_lhs <- clhs(as.data.frame(small), size = 12*n, iter = 5000,use.cpp = T, simple = F)
   temp <- sl_lhs$sampled_data
   return(temp)
 }
@@ -488,13 +491,13 @@ createTSP <- function(X,n,ancDat){
 pkgs <- c("Rcpp","LaplacesDemon", "foreach","sf",
           "raster","LearnGeom","dplyr","reticulate","gdistance","scales","velox","clhs")
 statsTSP_trans <- foreach(n = nums, .combine = rbind, .packages = pkgs,
-                    .export = c("Tri_build","fullSL","start_sf","tr1")) %dopar% { #
+                    .export = c("Tri_build","start_sf","tr1")) %dopar% { #
                       reticulate::source_python("mTSP.py")
                       smallSet <- createTSP(Xcost,n,ancDatVL)
                       smallSet <- smallSet[complete.cases(smallSet),]
                       if(nrow(smallSet) > 1){
-                        res1 <- sumKSTest(fullSL,smallSet)
-                        res2 <- fillTest(fullSL,smallSet)
+                        res1 <- sumKSTestTransect(ancDatVL,smallSet)
+                        res2 <- fillTest_Transect(ancDatVL,smallSet)
                         data.frame(Num = n,KS = res1, fillQual = res2)
                       }else{
                         NULL
@@ -619,8 +622,8 @@ collectTime <- function(X,sampleFun, num, dropAllowed){
   return(test_res)
 }
 
-trans <- seq(5,60,by = 5) ##numbers of transects
-trans <- rep(trans,each = 5) ##replications at each level
+trans <- as.integer((seq(5,50,length.out = 3))) ##numbers of transects
+trans <- rep(trans,each = 4) ##replications at each level
 
 LHSTime <- collectTime(X,timeLHS,num = trans, dropAllowed = F)
 LHSTime$Type = "LHS"
