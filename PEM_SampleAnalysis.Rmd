@@ -49,15 +49,15 @@ sumKSTestTransect <- function(full,small){
   return(out)
 }
 
-adTest <- function(full,small){
-  out <- 0
-  for(i in 1:ncol(full)){
-    fn <- ecdf(full[,i])
-    temp <- ad.test(small[,i], null = fn)
-    out <- out + temp$statistic
-  }
-  return(out)
-}
+# adTest <- function(full,small){
+#   out <- 0
+#   for(i in 1:ncol(full)){
+#     fn <- ecdf(full[,i])
+#     temp <- ad.test(small[,i], null = fn)
+#     out <- out + temp$statistic
+#   }
+#   return(out)
+# }
 
 fillTest <- function(full, small){
   strata <- apply(
@@ -74,19 +74,29 @@ fillTest <- function(full, small){
   return(length(fillQual[fillQual == 0])) 
 }
 
-Tri_build <- function(id, x, y){
-  tris <- CreateRegularPolygon(3, c(as.numeric(paste(x)), 
-                                    as.numeric(paste(y))), 145) # number of sides, center pt and length of sides
+fillTest_Transect <- function(full, small){
+  strata <- lapply(
+    full$rasterbands, 
+    function(x) {
+      quantile(x, probs = seq(0, 1, 0.01), na.rm = TRUE)
+    }
+  )
+  fillQual <- foreach(var = 1:full$nbands,.combine = cbind) %do% {
+    .Call(graphics:::C_BinCount, small[,var], strata[[var]], TRUE,TRUE)
+  }
   
-  MoonLineCentre <- data.frame(tris) %>%
-    st_as_sf(., coords = c("X", "Y"), crs = 3005) %>%
-    mutate(id = id) %>%
-    group_by(id) %>%
-    dplyr::summarise() %>%
-    st_cast("POLYGON") %>%
-    st_cast("MULTILINESTRING") #%>%
+  return(length(fillQual[fillQual == 0])) 
+}
+
+Tri_build <- function(id, x, y){
+  tris <- CreateRegularPolygon(3, c(x,y), 145) # number of sides, center pt and length of sides
+  tris <- tris[c(1:3,1),]
+  lines <- st_linestring(tris)
+  
+  g = st_sfc(lines)
+  out <- st_sf(g,ID = id)
   #st_set_crs(newproj)
-  return(MoonLineCentre)
+  return(out)
 } 
 ```
 
@@ -285,8 +295,8 @@ fullSet <- sampleRegular(ancDatLL, size = 100000,sp = T)
 X <- st_as_sf(fullSet) ##This line takes a while, but I'm not sure of an alternative
 X <- X[!is.na(X$X25m_DAH_3Class),]
 # 
- fullSL <- sampleRegular(ancDatSL, size = 100000,GDAL = T)
- fullSL <- fullSL[complete.cases(fullSL),]
+# fullSL <- sampleRegular(ancDatSL, size = 100000,GDAL = T)
+# fullSL <- fullSL[complete.cases(fullSL),]
 
 fullSet <- sampleRegular(ancDatLL_cost, size = 100000,sp = T)
 Xcost <- st_as_sf(fullSet)
@@ -325,7 +335,8 @@ createCCLHS_30m <- function(X,n,ancDat){
     temp
     
   }
-  temp <- suppressWarnings(raster::extract(ancDat, small))
+  small <- st_as_sf(small)
+  temp <- ancDat$extract_points(small)
   temp <- temp[!is.na(temp[1,]),]
   return(temp)
 }
@@ -348,17 +359,17 @@ createCCLHS <- function(X,n,ancDat){
 }
 
 ##function to run simulations
-collectStats <- function(X,sampleFun,nums,testFun1 = sumKSTestTransect,testFun2 = fillTest,ancDat){
+collectStats <- function(X,sampleFun,nums,testFun1 = sumKSTestTransect,testFun2 = fillTest_Transect,ancDat){
   pkgs <- c("Rcpp","LaplacesDemon", "foreach","sf",
           "raster","LearnGeom","dplyr","reticulate","gdistance","scales","velox","clhs")
   test_res <- foreach(n = nums, .combine = rbind, .packages = pkgs,
-                    .export = c("Tri_build","fullSL","start_sf","tr1")) %dopar% { #
-                      reticulate::source_python("mTSP.py")
+                    .export = c("Tri_build","start_sf","tr1")) %dopar% { #
+                      #reticulate::source_python("mTSP.py")
                       smallSet <- sampleFun(X,n,ancDat)
                       smallSet <- smallSet[complete.cases(smallSet),]
                       if(nrow(smallSet) > 1){
                         res1 <- testFun1(ancDat,smallSet)
-                        res2 <- testFun2(fullSL,smallSet)
+                        res2 <- testFun2(ancDat,smallSet)
                         data.frame(Num = n,KS = res1, fillQual = res2)
                       }else{
                         NULL
@@ -370,8 +381,8 @@ collectStats <- function(X,sampleFun,nums,testFun1 = sumKSTestTransect,testFun2 
 ```
 
 ```{r run simulations}
-nums <- round(seq(5, 10, length.out = 10)) ##set sequence of transect number
-nums <- rep(nums, each = 2) ##replicates of each number (should be at least 5)
+nums <- round(seq(5, 50, length.out = 10)) ##set sequence of transect number
+nums <- rep(nums, each = 15) ##replicates of each number (should be at least 5)
 statsLHS_trans <- collectStats(X,createLHS,nums,ancDat = ancDatVL)
 statsLHS_trans$SType = "LHS"
 #fwrite(statsLHS_trans, "LHSNumSave.csv")
