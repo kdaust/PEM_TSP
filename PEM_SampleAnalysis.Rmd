@@ -379,7 +379,7 @@ statsCCLHS_trans <- collectStats(Xcost,createCCLHS,nums, ancDat = ancDatVL)
 statsCCLHS_trans$SType <- "CCLHS"
 #fwrite(statsCCLHS_trans, "CCLHSNumSave.csv")
 
-statsCCLHS_30m <- collectStats(Xcost, createCCLHS_30m, nums, ancDat = ancDatVL)
+statsCCLHS_30m <- collectStats(Xcost, createCCLHS_30m, nums, ancDat = ancDatSL)
 statsCCLHS_30m$SType <- "CCLHSReg"
 
 ##plot
