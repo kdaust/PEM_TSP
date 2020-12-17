@@ -317,7 +317,7 @@ createLHS <- function(X,n,ancDat){
     tempDat
   }
   small <- small[complete.cases(small),]
-  sl_lhs <- clhs(as.data.frame(small), size = 25*n, iter = 5000,use.cpp = T,simple = F)
+  sl_lhs <- clhs(as.data.frame(small), size = 12*n, iter = 5000,use.cpp = T,simple = F)
   temp <- sl_lhs$sampled_data
   return(temp)
 }
@@ -329,7 +329,7 @@ createCCLHS_30m <- function(X,n,ancDat){
   dat <- X[temp$index_samples,]
   small <- foreach(j = 1:nrow(dat),.combine = rbind) %do% {
     tri <- Tri_build(id = j, x = st_coordinates(dat[j,])[1],y = st_coordinates(dat[j,])[2])
-    tPs <- st_sample(tri, size = 25, type = "regular")
+    tPs <- st_sample(tri, size = 12, type = "regular")
     temp <- suppressWarnings(st_sf(data.frame(id = j, geometry = tPs)) %>%
        st_cast("POINT"))
     temp
@@ -353,7 +353,7 @@ createCCLHS <- function(X,n,ancDat){
     tempDat
   }
   small <- small[complete.cases(small),]
-  sl_lhs <- clhs(as.data.frame(small), size = 25*n, iter = 5000,use.cpp = T,simple = F)
+  sl_lhs <- clhs(as.data.frame(small), size = 12*n, iter = 5000,use.cpp = T,simple = F)
   temp <- sl_lhs$sampled_data
   return(temp)
 }
@@ -381,8 +381,8 @@ collectStats <- function(X,sampleFun,nums,testFun1 = sumKSTestTransect,testFun2 
 ```
 
 ```{r run simulations}
-nums <- round(seq(5, 50, length.out = 10)) ##set sequence of transect number
-nums <- rep(nums, each = 15) ##replicates of each number (should be at least 5)
+nums <- round(seq(5, 50, length.out = 5)) ##set sequence of transect number
+nums <- rep(nums, each = 5) ##replicates of each number (should be at least 5)
 statsLHS_trans <- collectStats(X,createLHS,nums,ancDat = ancDatVL)
 statsLHS_trans$SType = "LHS"
 #fwrite(statsLHS_trans, "LHSNumSave.csv")
@@ -418,6 +418,8 @@ Bfill_transectPlot <- ggplot(statsAll, aes(x = Num, y = fillQual, fill = SType))
 plot(Bfill_transectPlot)
 ggsave("./Results/KS_transectPlot.jpeg", device = 'jpeg')
 
+# smallSet <- as.matrix(smallSet)
+# test <- cramer.test(x = fullSL,y = smallSet, just.statistic = T)
 ```
 
 This next chunk is basically the same as above but using the TSP and allowing drops. I separated it because this part takes longer, so might not want to always run it.
