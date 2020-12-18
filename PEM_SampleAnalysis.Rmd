@@ -116,14 +116,14 @@ ancDatLL <- raster::stack(covars)
 proj4string(ancDatLL) <- "+init=epsg:3005"
 ancDatLL <- mask(ancDatLL,becLayer)
 
-becLayer <- raster(paste0(covLoc,"/becRaster.tif"))
-area <- 5
-if(area == "all"){
-  becLayer[!is.na(becLayer)] <- 1
-}else{
-  becLayer[becLayer != area] <- NA
-}
-ancDatLL <- mask(ancDatLL,becLayer)
+# becLayer <- raster(paste0(covLoc,"/becRaster.tif"))
+# area <- 5
+# if(area == "all"){
+#   becLayer[!is.na(becLayer)] <- 1
+# }else{
+#   becLayer[becLayer != area] <- NA
+# }
+# ancDatLL <- mask(ancDatLL,becLayer)
 
 LL_corr <- layerStats(ancDatLL, 'pearson', na.rm=T)
 corr_matrixLL <- LL_corr$'pearson correlation coefficient'
@@ -135,7 +135,7 @@ layerNamesSl <- c("twi","valley","tca2","swi","cov","tpi") ##need to change this
 ancDatSL <- raster::stack(covars)
 proj4string(ancDatSL) <- "+init=epsg:3005"
 
-ancDatSL <- mask(ancDatSL,becLayer)
+# ancDatSL <- mask(ancDatSL,becLayer)
 
 SL_corr <- layerStats(ancDatSL, 'pearson', na.rm=T)
 corr_matrixSL <- SL_corr$'pearson correlation coefficient'
@@ -208,7 +208,7 @@ plot(acost)
 
 acost2 <- projectRaster(acost, ancDatSL)
 acost2 <- mask(acost2, alt)
-acost2 <- mask(acost2, becLayer)
+#acost2 <- mask(acost2, becLayer)
 ancDatSL_cost <- stack(ancDatSL,acost2)
 ```
 ### Simulation 1: Single point sampling

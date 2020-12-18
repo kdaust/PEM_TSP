@@ -115,7 +115,7 @@ layerNamesLL <- c("DAH","LFC","MRVBF","BEC", "cost") ##need to change this if yo
 #becLayer[becLayer != 3] <- NA
 ancDatLL <- raster::stack(covars)
 proj4string(ancDatLL) <- "+init=epsg:3005"
-ancDatLL <- mask(ancDatLL,becLayer)
+#ancDatLL <- mask(ancDatLL,becLayer)
 
 LL_corr <- layerStats(ancDatLL, 'pearson', na.rm=T)
 corr_matrixLL <- LL_corr$'pearson correlation coefficient'
@@ -129,7 +129,28 @@ proj4string(ancDatSL) <- "+init=epsg:3005"
 #ancDatSL <- mask(ancDatSL, becLayer)
 
 ##Turn into data.frame, bin each variable, combine into a label, scount by label
-ancDatSL.dat <- as.data.frame(getValues(ancDatSL)) %>% drop_na() %>% unite(LHC.var, as.character(X1:X4, sep = ","))
+ancVals <- as.data.table(getValues(ancDatSL))
+ancVals <- na.omit(ancVals)
+ancBin <- ancVals[,lapply(.SD, function(x){cut(x,breaks = quantile(x,seq(0,1,length.out = 9)),labels = F,include.lowest = T)})] ##put into 10 bins by quantile
+ancBin <- unite(ancBin, LHSVar, sep = "")
+ancBin[,LHSVar := as.numeric(LHSVar)]
+ancBin <- ancBin[,.(Num = .N), by = .(LHSVar)] ##count occurences
+ancSmall <- ancBin[Num > 99,] ##remove uncommon
+setorder(ancSmall,LHSVar)
+ancQuants <- ancVals[,lapply(.SD,function(x){quantile(x,seq(0,1,length.out = 9))})] ##save quantiles of full set
+
+##now testing a sampled set - temp should be the result of one of the sample functions (e.g. createCCLHS)
+sampDat <- as.data.table(temp)
+##split into same bins as full data set
+for(i in 1:ncol(sampDat)){
+  sampDat[[i]] <- cut(sampDat[[i]],breaks = ancQuants[[i]], labels = F, include.lowest = T)
+}
+sampBin <- unite(sampDat,sampLHS,sep = "")
+sampBin[,sampLHS := as.numeric(sampLHS)]
+sampBin <- sampBin[,.(SampNum = .N), by = .(sampLHS)]##count
+##merge to compare
+ancSmall[sampBin, SampNum := i.SampNum, on = c(LHSVar = "sampLHS")]
+#################
 
 SL_corr <- layerStats(ancDatSL, 'pearson', na.rm=T)
 corr_matrixSL <- SL_corr$'pearson correlation coefficient'
