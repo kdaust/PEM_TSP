@@ -1,0 +1,161 @@
+---
+title: "NewDistributionTest"
+author: "Will MacKenzie"
+date: "18/12/2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE)
+library(clhs)
+library(sf)
+library(raster)
+library(sp)
+library(gdistance)
+library(foreach)
+library(data.table)
+library(fasterize)
+library(reticulate)
+library(here)
+library(LearnGeom)
+library(tidyverse)
+library(goftest)
+library(velox)
+require(ggthemes)
+
+```
+
+The below chunk creates some generic statistical functions
+
+```{r source}
+source_python("./mTSP.py")
+
+##Kolmogorov-Smirnov test
+sumKSTest <- function(full,small){
+  out <- 0
+  for(i in 1:ncol(full)){
+    ks <- suppressWarnings(ks.test(full[,i],small[,i]))
+    out <- out+ks$statistic
+  } 
+  return(out)
+}
+
+sumKSTestTransect <- function(full,small){
+  out <- 0
+  for(i in 1:full$nbands){
+    ks <- suppressWarnings(ks.test(full$rasterbands[[i]],small[,i]))
+    out <- out+ks$statistic
+  } 
+  return(out)
+}
+
+# adTest <- function(full,small){
+#   out <- 0
+#   for(i in 1:ncol(full)){
+#     fn <- ecdf(full[,i])
+#     temp <- ad.test(small[,i], null = fn)
+#     out <- out + temp$statistic
+#   }
+#   return(out)
+# }
+
+fillTest <- function(full, small){
+  strata <- apply(
+    full, 
+    2, 
+    function(x) {
+      quantile(x, probs = seq(0, 1, 0.01), na.rm = TRUE)
+    }
+  )
+  fillQual <- foreach(var = 1:ncol(full),.combine = cbind) %do% {
+    .Call(graphics:::C_BinCount, small[,var], strata[,var], TRUE,TRUE)
+  }
+  
+  return(length(fillQual[fillQual == 0])) 
+}
+
+fillTest_Transect <- function(full, small){
+  strata <- lapply(
+    full$rasterbands, 
+    function(x) {
+      quantile(x, probs = seq(0, 1, 0.01), na.rm = TRUE)
+    }
+  )
+  fillQual <- foreach(var = 1:full$nbands,.combine = cbind) %do% {
+    .Call(graphics:::C_BinCount, small[,var], strata[[var]], TRUE,TRUE)
+  }
+  
+  return(length(fillQual[fillQual == 0])) 
+}
+
+x=0; y=0
+Tri_build <- function(id, x, y){
+  tris <- CreateRegularPolygon(3, c(x,y), 145) # number of sides, center pt and length of sides
+  tris <- tris[c(1:3,1),]
+  lines <- st_linestring(tris)
+  
+  g = st_sfc(lines)
+  out <- st_sf(g,ID = id)
+  #st_set_crs(newproj)
+  return(out)
+} 
+```
+
+Load data and setup covariates
+
+```{r load data}
+datLocGit <- here("InputData") ## Data
+covLoc <- here("Covariates") ## Too big for git data
+
+### landscape levels covariates
+covars <- paste(covLoc, c("25m_DAH_3Class.tif","25m_LandformClass_Default_Seive4.tif",
+                          "25m_MRVBF_Classified_IS64Low6Up2.tif","becRaster.tif"), sep = "/")# ,"DEM_25m.tif"
+layerNamesLL <- c("DAH","LFC","MRVBF","BEC", "cost") ##need to change this if you change the layers
+#becLayer <- raster(paste(covLoc,"becRaster.tif", sep = "/")) ## use these will apply to only a single BGC
+#becLayer[becLayer != 3] <- NA
+ancDatLL <- raster::stack(covars)
+proj4string(ancDatLL) <- "+init=epsg:3005"
+ancDatLL <- mask(ancDatLL,becLayer)
+
+LL_corr <- layerStats(ancDatLL, 'pearson', na.rm=T)
+corr_matrixLL <- LL_corr$'pearson correlation coefficient'
+
+## stand level covariates (about 11 million r)
+SLcov <- c("twi.tif","valley_depth_2.tif","tca2.tif","swi_area_mod.tif","cov.tif","tpi.tif")
+covars <- paste(covLoc, SLcov, sep = "/")
+layerNamesSl <- c("twi","valley","tca2","swi","cov","tpi") ##need to change this if you change the layers
+ancDatSL <- raster::stack(covars)
+proj4string(ancDatSL) <- "+init=epsg:3005"
+#ancDatSL <- mask(ancDatSL, becLayer)
+
+##Turn into data.frame, bin each variable, combine into a label, scount by label
+ancDatSL.dat <- as.data.frame(getValues(ancDatSL)) %>% drop_na() %>% unite(LHC.var, as.character(X1:X4, sep = ","))
+
+SL_corr <- layerStats(ancDatSL, 'pearson', na.rm=T)
+corr_matrixSL <- SL_corr$'pearson correlation coefficient'
+
+##combine layers to compare correlation
+ancDatLL2 <- projectRaster(ancDatLL, ancDatSL, method = 'ngb')
+ancDatALL <- stack(ancDatSL, ancDatLL2)
+All_corr <- layerStats(ancDatALL, 'pearson', na.rm=T)
+corr_matrixAll <- All_corr$'pearson correlation coefficient'
+
+## dem for transtion layer
+alt <- raster(paste0(covLoc, "/dem.tif"))
+proj4string(alt) <- "+init=epsg:3005"
+
+## template raster
+allRast <- raster(paste0(covLoc,"/Road_Rast_Small.tif"))    
+allRast[allRast == 255] <- NA
+allRast <- trim(allRast)
+
+###read in roads
+rdsAll <- st_read(paste0(datLocGit,"/road_access_for_cost.gpkg"))
+rdsAll <- rdsAll[,"DESCRIPTIO"]
+colnames(rdsAll)[1] <- "road_surface"
+rdsAll <- as.data.table(rdsAll) %>% st_as_sf()
+
+##Smithers start location
+start_sf <- st_read("SmithersStart.gpkg")
+start <- as(start_sf, "Spatial")
+```
