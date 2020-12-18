@@ -6,7 +6,7 @@ output: html_document
 ---
 
 ```{r setup, include=FALSE}
-knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_chunk$set(echo = FALSE)
 library(clhs)
 library(sf)
 library(raster)
@@ -88,6 +88,7 @@ fillTest_Transect <- function(full, small){
   return(length(fillQual[fillQual == 0])) 
 }
 
+x=0; y=0
 Tri_build <- function(id, x, y){
   tris <- CreateRegularPolygon(3, c(x,y), 145) # number of sides, center pt and length of sides
   tris <- tris[c(1:3,1),]
@@ -108,20 +109,27 @@ covLoc <- here("Covariates") ## Too big for git data
 
 ### landscape levels covariates
 covars <- paste(covLoc, c("25m_DAH_3Class.tif","25m_LandformClass_Default_Seive4.tif",
-                          "25m_MRVBF_Classified_IS64Low6Up2.tif","dem.tif","becRaster.tif"), sep = "/")# ,"DEM_25m.tif"
-layerNamesLL <- c("DAH","LFC","MRVBF","DEM","BEC", "cost") ##need to change this if you change the layers
+                          "25m_MRVBF_Classified_IS64Low6Up2.tif","becRaster.tif"), sep = "/")# ,"DEM_25m.tif"
+layerNamesLL <- c("DAH","LFC","MRVBF","BEC", "cost") ##need to change this if you change the layers
+#becLayer <- raster(paste(covLoc,"becRaster.tif", sep = "/")) ## use these will apply to only a single BGC
+#becLayer[becLayer != 3] <- NA
 ancDatLL <- raster::stack(covars)
 proj4string(ancDatLL) <- "+init=epsg:3005"
+ancDatLL <- mask(ancDatLL,becLayer)
 
 LL_corr <- layerStats(ancDatLL, 'pearson', na.rm=T)
 corr_matrixLL <- LL_corr$'pearson correlation coefficient'
 
-## stand level covariates
+## stand level covariates (about 11 million r)
 SLcov <- c("twi.tif","valley_depth_2.tif","tca2.tif","swi_area_mod.tif","cov.tif","tpi.tif")
 covars <- paste(covLoc, SLcov, sep = "/")
 layerNamesSl <- c("twi","valley","tca2","swi","cov","tpi") ##need to change this if you change the layers
 ancDatSL <- raster::stack(covars)
 proj4string(ancDatSL) <- "+init=epsg:3005"
+#ancDatSL <- mask(ancDatSL, becLayer)
+
+##Turn into data.frame, bin each variable, combine into a label, scount by label
+ancDatSL.dat <- as.data.frame(getValues(ancDatSL)) %>% drop_na() %>% unite(LHC.var, as.character(X1:X4, sep = ","))
 
 SL_corr <- layerStats(ancDatSL, 'pearson', na.rm=T)
 corr_matrixSL <- SL_corr$'pearson correlation coefficient'
@@ -194,6 +202,7 @@ plot(acost)
 
 acost2 <- projectRaster(acost, ancDatSL)
 acost2 <- mask(acost2, alt)
+acost2 <- mask(acost2, becLayer)
 ancDatSL_cost <- stack(ancDatSL,acost2)
 ```
 ### Simulation 1: Single point sampling
@@ -203,11 +212,11 @@ For all the following simulations we're testing with random samples, LHS samples
 There are different ways of testing space filling: in the below code, we use KS statistics, a simple bin fill function, and the AD test (doesn't seem to work well)
 
 ```{r single point}
-fullSet <- sampleRegular(ancDatSL, size = 10000,useGDAL = T)
+fullSet <- sampleRegular(ancDatSL, size = 100000,useGDAL = T)
 X <- fullSet
-X <- X[complete.cases(X),]
+X <- X[complete.cases(X),] ##this reduces from 100,000 tp 3700 in one example
 
-fullSet <- sampleRegular(ancDatSL_cost, size = 10000,useGDAL = T)
+fullSet <- sampleRegular(ancDatSL_cost, size = 100000,useGDAL = T)
 Xcost <- fullSet
 Xcost <- Xcost[complete.cases(Xcost),]
 
@@ -317,19 +326,19 @@ createLHS <- function(X,n,ancDat){
     tempDat
   }
   small <- small[complete.cases(small),]
-  sl_lhs <- clhs(as.data.frame(small), size = 12*n, iter = 5000,use.cpp = T,simple = F)
+  sl_lhs <- clhs(as.data.frame(small), size = 15*n, iter = 5000,use.cpp = T,simple = F)
   temp <- sl_lhs$sampled_data
   return(temp)
 }
 
-##create cclhs sample, extract points @ 30m intervals
+##create cclhs sample, extract points @ 50m intervals
 createCCLHS_30m <- function(X,n,ancDat){
   xMat <- st_drop_geometry(X)
   temp <- clhs(xMat,size = n,cost = ncol(xMat),iter = 5000,use.cpp = T,simple = F)
   dat <- X[temp$index_samples,]
   small <- foreach(j = 1:nrow(dat),.combine = rbind) %do% {
     tri <- Tri_build(id = j, x = st_coordinates(dat[j,])[1],y = st_coordinates(dat[j,])[2])
-    tPs <- st_sample(tri, size = 12, type = "regular")
+    tPs <- st_sample(tri, size = 15, type = "regular")
     temp <- suppressWarnings(st_sf(data.frame(id = j, geometry = tPs)) %>%
        st_cast("POINT"))
     temp
@@ -353,7 +362,7 @@ createCCLHS <- function(X,n,ancDat){
     tempDat
   }
   small <- small[complete.cases(small),]
-  sl_lhs <- clhs(as.data.frame(small), size = 12*n, iter = 5000,use.cpp = T,simple = F)
+  sl_lhs <- clhs(as.data.frame(small), size = 15*n, iter = 5000,use.cpp = T,simple = F)
   temp <- sl_lhs$sampled_data
   return(temp)
 }
@@ -381,7 +390,7 @@ collectStats <- function(X,sampleFun,nums,testFun1 = sumKSTestTransect,testFun2 
 ```
 
 ```{r run simulations}
-nums <- round(seq(5, 50, length.out = 3)) ##set sequence of transect number
+nums <- round(seq(5, 50, length.out = 10)) ##set sequence of transect number
 nums <- rep(nums, each = 5) ##replicates of each number (should be at least 5)
 
 statsLHS_trans <- collectStats(X,createLHS,nums,ancDat = ancDatVL)
@@ -482,7 +491,7 @@ createTSP <- function(X,n,ancDat){
     tempDat
   }
   small <- small[complete.cases(small),]
-  sl_lhs <- clhs(as.data.frame(small), size = 12*n, iter = 5000,use.cpp = T, simple = F)
+  sl_lhs <- clhs(as.data.frame(small), size = 15*n, iter = 5000,use.cpp = T, simple = F)
   temp <- sl_lhs$sampled_data
   return(temp)
 }
@@ -622,8 +631,8 @@ collectTime <- function(X,sampleFun, num, dropAllowed){
   return(test_res)
 }
 
-trans <- as.integer((seq(5,50,length.out = 3))) ##numbers of transects
-trans <- rep(trans,each = 4) ##replications at each level
+trans <- as.integer((seq(5,50,length.out = 5))) ##numbers of transects
+trans <- rep(trans,each = 5) ##replications at each level
 
 LHSTime <- collectTime(X,timeLHS,num = trans, dropAllowed = F)
 LHSTime$Type = "LHS"
