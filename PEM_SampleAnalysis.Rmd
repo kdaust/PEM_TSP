@@ -108,10 +108,19 @@ covLoc <- here("Covariates") ## Too big for git data
 
 ### landscape levels covariates
 covars <- paste(covLoc, c("25m_DAH_3Class.tif","25m_LandformClass_Default_Seive4.tif",
-                          "25m_MRVBF_Classified_IS64Low6Up2.tif","dem.tif","becRaster.tif"), sep = "/")# ,"DEM_25m.tif"
-layerNamesLL <- c("DAH","LFC","MRVBF","DEM","BEC", "cost") ##need to change this if you change the layers
+                          "25m_MRVBF_Classified_IS64Low6Up2.tif","becRaster.tif"), sep = "/")# ,"DEM_25m.tif"
+layerNamesLL <- c("DAH","LFC","MRVBF","BEC", "cost") ##need to change this if you change the layers
 ancDatLL <- raster::stack(covars)
 proj4string(ancDatLL) <- "+init=epsg:3005"
+
+becLayer <- raster(paste0(covLoc,"/becRaster.tif"))
+area <- 5
+if(area == "all"){
+  becLayer[!is.na(becLayer)] <- 1
+}else{
+  becLayer[becLayer != area] <- NA
+}
+ancDatLL <- mask(ancDatLL,becLayer)
 
 LL_corr <- layerStats(ancDatLL, 'pearson', na.rm=T)
 corr_matrixLL <- LL_corr$'pearson correlation coefficient'
@@ -122,6 +131,7 @@ covars <- paste(covLoc, SLcov, sep = "/")
 layerNamesSl <- c("twi","valley","tca2","swi","cov","tpi") ##need to change this if you change the layers
 ancDatSL <- raster::stack(covars)
 proj4string(ancDatSL) <- "+init=epsg:3005"
+ancDatSL <- mask(ancDatSL,becLayer)
 
 SL_corr <- layerStats(ancDatSL, 'pearson', na.rm=T)
 corr_matrixSL <- SL_corr$'pearson correlation coefficient'
