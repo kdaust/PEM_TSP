@@ -128,15 +128,15 @@ ancDatSL <- raster::stack(covars)
 proj4string(ancDatSL) <- "+init=epsg:3005"
 #ancDatSL <- mask(ancDatSL, becLayer)
 
-ancDatLL_cost <- stack(ancDatLL,acost2)
+#ancDatLL_cost <- stack(ancDatLL,acost2)
 fullSet <- sampleRegular(ancDatLL, size = 100000,sp = T) 
 X <- st_as_sf(fullSet) ##This line takes a while, but I'm not sure of an alternative
 X <- X[!is.na(X$X25m_DAH_3Class),]
 
-fullSet <- sampleRegular(ancDatLL_cost, size = 100000,sp = T)
-Xcost <- st_as_sf(fullSet)
-Xcost <- Xcost[!is.na(Xcost$X25m_DAH_3Class),]
-Xcost <- Xcost[!is.infinite(Xcost$layer),]
+# fullSet <- sampleRegular(ancDatLL_cost, size = 100000,sp = T)
+# Xcost <- st_as_sf(fullSet)
+# Xcost <- Xcost[!is.na(Xcost$X25m_DAH_3Class),]
+# Xcost <- Xcost[!is.infinite(Xcost$layer),]
 
 ancDatVL <- velox(ancDatSL) ##create velox object
 
@@ -217,32 +217,16 @@ ks_stat <- function(yFull,ySample){
   return(max(diff))
 }
 #################
+###output selected bins to new spatial layer for review
+## select non-bin values to NA
+ancDatSL.temp <- ancDatSL
+ancDatSL.temp$twi[ancDatSL.temp$twi < 4.71 | ancDatSL.temp$twi > 7.16] <- NA
+ancDatSL.temp$valley_depth_2[ancDatSL.temp$valley_depth_2  > 60.44] <- NA
+ancDatSL.temp$tca2[ancDatSL.temp$tca2  > 470598] <- NA
+ancDatSL.temp$swi_area_mod[ancDatSL.temp$swi_area_mod > 9465973] <- NA
 
-SL_corr <- layerStats(ancDatSL, 'pearson', na.rm=T)
-corr_matrixSL <- SL_corr$'pearson correlation coefficient'
+### calculate a new layer from a sum of covariates including NA will set any where an NA exists to NA
+newlayer <- raster::calc(ancDatSL.temp, sum, na.rm=F)
 
-##combine layers to compare correlation
-ancDatLL2 <- projectRaster(ancDatLL, ancDatSL, method = 'ngb')
-ancDatALL <- stack(ancDatSL, ancDatLL2)
-All_corr <- layerStats(ancDatALL, 'pearson', na.rm=T)
-corr_matrixAll <- All_corr$'pearson correlation coefficient'
-
-## dem for transtion layer
-alt <- raster(paste0(covLoc, "/dem.tif"))
-proj4string(alt) <- "+init=epsg:3005"
-
-## template raster
-allRast <- raster(paste0(covLoc,"/Road_Rast_Small.tif"))    
-allRast[allRast == 255] <- NA
-allRast <- trim(allRast)
-
-###read in roads
-rdsAll <- st_read(paste0(datLocGit,"/road_access_for_cost.gpkg"))
-rdsAll <- rdsAll[,"DESCRIPTIO"]
-colnames(rdsAll)[1] <- "road_surface"
-rdsAll <- as.data.table(rdsAll) %>% st_as_sf()
-
-##Smithers start location
-start_sf <- st_read("SmithersStart.gpkg")
-start <- as(start_sf, "Spatial")
+writeRaster(newlayer, "./Tests/SelectedCovariateBins.tif", format = "GTiff", overwrite  = TRUE)
 ```
