@@ -320,6 +320,43 @@ Xcost <- Xcost[!is.infinite(Xcost$layer),]
 
 ancDatVL <- velox(ancDatSL) ##create velox object
 
+###setup full LHS distribution for statistics
+ancVals <- as.data.table(getValues(ancDatSL))
+ancVals <- na.omit(ancVals)
+ancBin <- ancVals[,lapply(.SD, function(x){cut(x,breaks = seq(min(x), max(x), length.out = 9),labels = F,include.lowest = T)})] ##put into 10 bins by quantile
+ancBin <- unite(ancBin, LHSVar, sep = "")
+ancBin[,LHSVar := as.numeric(LHSVar)]
+ancBin <- ancBin[,.(Num = .N), by = .(LHSVar)] ##count occurences
+ancSmall <- ancBin[Num > 99,] ##remove uncommon
+setorder(ancSmall,-Num)
+plot(ancSmall$Num, type = "l")
+ancQuants <- ancVals[,lapply(.SD,function(x){seq(min(x), max(x), length.out = 9)})] ##save quantiles of full set
+
+##function to test KS statistic of LHS distribution
+ks_stat_clhs <- function(sample,fullDat,fullBreaks){
+  sampDat <- as.data.table(sample)
+  ##split into same bins as full data set
+  for(i in 1:ncol(sampDat)){
+    sampDat[[i]] <- cut(sampDat[[i]],breaks = ancQuants[[i]], labels = F, include.lowest = T)
+  }
+  sampBin <- unite(sampDat,sampLHS,sep = "")
+  sampBin[,sampLHS := as.numeric(sampLHS)]
+  sampBin <- sampBin[,.(SampNum = .N), by = .(sampLHS)]##count
+  ##merge to compare
+  fullDat[sampBin, SampNum := i.SampNum, on = c(LHSVar = "sampLHS")]
+  fullDat[is.na(SampNum), SampNum := 0]
+  fullDat[,SampNum := SampNum/sum(SampNum)]
+  fullDat[,Num := Num/sum(Num)]
+  fullDat[,LHSID := seq_along(Num)]
+  cumFull <- cumsum(fullDat$Num)
+  cumSamp <- cumsum(fullDat$SampNum)
+  diff <- abs(cumFull - cumSamp)
+  return(max(diff))
+}
+
+```
+
+```{r sampling functions}
 ###create LHS transect sample, use clhs to sample transects
 createLHS <- function(X,n,ancDat){
   xMat <- st_drop_geometry(X)
@@ -374,16 +411,16 @@ createCCLHS <- function(X,n,ancDat){
 }
 
 ##function to run simulations
-collectStats <- function(X,sampleFun,nums,testFun1 = sumKSTestTransect,testFun2 = fillTest_Transect,ancDat){
+collectStats <- function(X,sampleFun, nums,ancDat, testFun1 = ks_stat_clhs,testFun2 = fillTest_Transect){
   pkgs <- c("Rcpp","LaplacesDemon", "foreach","sf",
-          "raster","LearnGeom","dplyr","reticulate","gdistance","scales","velox","clhs")
+          "raster","LearnGeom","dplyr","reticulate","gdistance","scales","velox","clhs","data.table","tidyr")
   test_res <- foreach(n = nums, .combine = rbind, .packages = pkgs,
-                    .export = c("Tri_build","start_sf","tr1")) %dopar% { #
+                    .export = c("Tri_build","start_sf","tr1","ancQuants","ancSmall")) %dopar% { #
                       #reticulate::source_python("mTSP.py")
                       smallSet <- sampleFun(X,n,ancDat)
                       smallSet <- smallSet[complete.cases(smallSet),]
                       if(nrow(smallSet) > 1){
-                        res1 <- testFun1(ancDat,smallSet)
+                        res1 <- testFun1(sample = smallSet,fullDat = ancSmall,fullBreaks = ancQuants)
                         res2 <- testFun2(ancDat,smallSet)
                         data.frame(Num = n,KS = res1, fillQual = res2)
                       }else{
@@ -396,7 +433,7 @@ collectStats <- function(X,sampleFun,nums,testFun1 = sumKSTestTransect,testFun2 
 ```
 
 ```{r run simulations}
-nums <- round(seq(5, 50, length.out = 10)) ##set sequence of transect number
+nums <- round(seq(5, 50, length.out = 3)) ##set sequence of transect number
 nums <- rep(nums, each = 5) ##replicates of each number (should be at least 5)
 
 statsLHS_trans <- collectStats(X,createLHS,nums,ancDat = ancDatVL)

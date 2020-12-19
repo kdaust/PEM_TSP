@@ -128,18 +128,67 @@ ancDatSL <- raster::stack(covars)
 proj4string(ancDatSL) <- "+init=epsg:3005"
 #ancDatSL <- mask(ancDatSL, becLayer)
 
+ancDatLL_cost <- stack(ancDatLL,acost2)
+fullSet <- sampleRegular(ancDatLL, size = 100000,sp = T) 
+X <- st_as_sf(fullSet) ##This line takes a while, but I'm not sure of an alternative
+X <- X[!is.na(X$X25m_DAH_3Class),]
+
+fullSet <- sampleRegular(ancDatLL_cost, size = 100000,sp = T)
+Xcost <- st_as_sf(fullSet)
+Xcost <- Xcost[!is.na(Xcost$X25m_DAH_3Class),]
+Xcost <- Xcost[!is.infinite(Xcost$layer),]
+
+ancDatVL <- velox(ancDatSL) ##create velox object
+
+
 ##Turn into data.frame, bin each variable, combine into a label, scount by label
 ancVals <- as.data.table(getValues(ancDatSL))
 ancVals <- na.omit(ancVals)
-ancBin <- ancVals[,lapply(.SD, function(x){cut(x,breaks = quantile(x,seq(0,1,length.out = 9)),labels = F,include.lowest = T)})] ##put into 10 bins by quantile
+ancBin <- ancVals[,lapply(.SD, function(x){cut(x,breaks = seq(min(x), max(x), length.out = 9),labels = F,include.lowest = T)})] ##put into 10 bins by quantile
 ancBin <- unite(ancBin, LHSVar, sep = "")
 ancBin[,LHSVar := as.numeric(LHSVar)]
 ancBin <- ancBin[,.(Num = .N), by = .(LHSVar)] ##count occurences
 ancSmall <- ancBin[Num > 99,] ##remove uncommon
-setorder(ancSmall,LHSVar)
-ancQuants <- ancVals[,lapply(.SD,function(x){quantile(x,seq(0,1,length.out = 9))})] ##save quantiles of full set
+setorder(ancSmall,-Num)
+plot(ancSmall$Num, type = "l")
+ancQuants <- ancVals[,lapply(.SD,function(x){seq(min(x), max(x), length.out = 9)})] ##save quantiles of full set
 
 ##now testing a sampled set - temp should be the result of one of the sample functions (e.g. createCCLHS)
+
+##regular single point clhs
+# temp <- clhs(ancVals,size = 600, use.cpp = T, simple = F)
+# temp <- temp$sampled_data
+
+## Transects regular resample
+# n = 40
+# xMat <- st_drop_geometry(Xcost)
+# temp <- clhs(xMat,size = n,cost = ncol(xMat),iter = 5000,use.cpp = T,simple = F)
+# dat <- X[temp$index_samples,]
+# small <- foreach(j = 1:nrow(dat),.combine = rbind) %do% {
+#   tri <- Tri_build(id = j, x = st_coordinates(dat[j,])[1],y = st_coordinates(dat[j,])[2])
+#   tPs <- st_sample(tri, size = 15, type = "regular")
+#   temp <- suppressWarnings(st_sf(data.frame(id = j, geometry = tPs)) %>%
+#      st_cast("POINT"))
+#   temp
+#   
+# }
+# small <- st_as_sf(small)
+# temp <- ancDat$extract_points(small)
+# temp <- temp[!is.na(temp[1,]),]
+
+##all transects
+n = 40
+xMat <- st_drop_geometry(Xcost)
+temp <- clhs(xMat,size = n,cost = ncol(xMat),iter = 5000,use.cpp = T,simple = F)
+dat <- X[temp$index_samples,]
+small <- foreach(j = 1:nrow(dat),.combine = rbind) %do% {
+  tri <- Tri_build(id = j, x = st_coordinates(dat[j,])[1],y = st_coordinates(dat[j,])[2])
+  tempDat <- ancDat$extract(tri)
+  tempDat <- tempDat[[1]]
+  tempDat
+}
+temp <- small[complete.cases(small),]
+
 sampDat <- as.data.table(temp)
 ##split into same bins as full data set
 for(i in 1:ncol(sampDat)){
@@ -149,7 +198,24 @@ sampBin <- unite(sampDat,sampLHS,sep = "")
 sampBin[,sampLHS := as.numeric(sampLHS)]
 sampBin <- sampBin[,.(SampNum = .N), by = .(sampLHS)]##count
 ##merge to compare
-ancSmall[sampBin, SampNum := i.SampNum, on = c(LHSVar = "sampLHS")]
+fullDat <- ancSmall
+fullDat[sampBin, SampNum := i.SampNum, on = c(LHSVar = "sampLHS")]
+fullDat[is.na(SampNum), SampNum := 0]
+fullDat[,SampNum := SampNum/sum(SampNum)]
+fullDat[,Num := Num/sum(Num)]
+fullDat[,LHSID := seq_along(Num)]
+ks_stat(fullDat$Num,fullDat$SampNum)
+
+fullDat <- melt(fullDat, id.vars = c("LHSID","LHSVar"))
+ggplot(fullDat, aes(x = LHSID, y = value, col = variable))+
+  geom_line()
+
+ks_stat <- function(yFull,ySample){
+  cumFull <- cumsum(yFull)
+  cumSamp <- cumsum(ySample)
+  diff <- abs(cumFull - cumSamp)
+  return(max(diff))
+}
 #################
 
 SL_corr <- layerStats(ancDatSL, 'pearson', na.rm=T)
