@@ -121,9 +121,9 @@ LL_corr <- layerStats(ancDatLL, 'pearson', na.rm=T)
 corr_matrixLL <- LL_corr$'pearson correlation coefficient'
 
 ## stand level covariates (about 11 million r)
-SLcov <- c("twi.tif","valley_depth_2.tif","tca2.tif","swi_area_mod.tif","cov.tif","tpi.tif")
+SLcov <- c("twi.tif","valley_depth_2.tif","tca2.tif","swi_area_mod.tif","tpi.tif")
 covars <- paste(covLoc, SLcov, sep = "/")
-layerNamesSl <- c("twi","valley","tca2","swi","cov","tpi") ##need to change this if you change the layers
+layerNamesSl <- c("twi","valley","tca2","swi","tpi") ##need to change this if you change the layers
 ancDatSL <- raster::stack(covars)
 proj4string(ancDatSL) <- "+init=epsg:3005"
 #ancDatSL <- mask(ancDatSL, becLayer)
@@ -150,7 +150,7 @@ ancBin[,LHSVar := as.numeric(LHSVar)]
 ancBin <- ancBin[,.(Num = .N), by = .(LHSVar)] ##count occurences
 ancSmall <- ancBin[Num > 99,] ##remove uncommon
 setorder(ancSmall,-Num)
-plot(ancSmall$Num, type = "l")
+#plot(ancSmall$Num, type = "l")
 ancQuants <- ancVals[,lapply(.SD,function(x){seq(min(x), max(x), length.out = 9)})] ##save quantiles of full set
 
 ##now testing a sampled set - temp should be the result of one of the sample functions (e.g. createCCLHS)
@@ -220,13 +220,14 @@ ks_stat <- function(yFull,ySample){
 ###output selected bins to new spatial layer for review
 ## select non-bin values to NA
 ancDatSL.temp <- ancDatSL
-ancDatSL.temp$twi[ancDatSL.temp$twi < 4.71 | ancDatSL.temp$twi > 7.16] <- NA
+ancDatSL.temp$twi[ancDatSL.temp$twi < 4.71] <- NA
+ancDatSL.temp$twi[ancDatSL.temp$twi > 7.16] <- NA
 ancDatSL.temp$valley_depth_2[ancDatSL.temp$valley_depth_2  > 60.44] <- NA
-ancDatSL.temp$tca2[ancDatSL.temp$tca2  > 470598] <- NA
-ancDatSL.temp$swi_area_mod[ancDatSL.temp$swi_area_mod > 9465973] <- NA
+ancDatSL.temp$tca2[ancDatSL.temp$tca2  > 625] <- NA
+ancDatSL.temp$swi_area_mod[ancDatSL.temp$swi_area_mod > 625] <- NA
 
 ### calculate a new layer from a sum of covariates including NA will set any where an NA exists to NA
 newlayer <- raster::calc(ancDatSL.temp, sum, na.rm=F)
-
-writeRaster(newlayer, "./Tests/SelectedCovariateBins.tif", format = "GTiff", overwrite  = TRUE)
+writeRaster(ancDatSL.temp$twi, "./Tests/SelectedCovariateBins.tif", format = "GTiff", overwrite  = TRUE)
+writeRaster(newlayer, "./Tests/AllSLCovariateBins.tif", format = "GTiff", overwrite  = TRUE)
 ```
