@@ -128,18 +128,24 @@ ancDatSL <- raster::stack(covars)
 proj4string(ancDatSL) <- "+init=epsg:3005"
 #ancDatSL <- mask(ancDatSL, becLayer)
 
-#ancDatLL_cost <- stack(ancDatLL,acost2)
+ancDatLL_cost <- stack(ancDatLL,acost2)
 fullSet <- sampleRegular(ancDatLL, size = 100000,sp = T) 
 X <- st_as_sf(fullSet) ##This line takes a while, but I'm not sure of an alternative
 X <- X[!is.na(X$X25m_DAH_3Class),]
 
-# fullSet <- sampleRegular(ancDatLL_cost, size = 100000,sp = T)
-# Xcost <- st_as_sf(fullSet)
-# Xcost <- Xcost[!is.na(Xcost$X25m_DAH_3Class),]
-# Xcost <- Xcost[!is.infinite(Xcost$layer),]
+fullSet <- sampleRegular(ancDatLL_cost, size = 100000,sp = T)
+Xcost <- st_as_sf(fullSet)
+Xcost <- Xcost[!is.na(Xcost$X25m_DAH_3Class),]
+Xcost <- Xcost[!is.infinite(Xcost$layer),]
 
 ancDatVL <- velox(ancDatSL) ##create velox object
 
+ks_stat <- function(yFull,ySample){
+  cumFull <- cumsum(yFull)
+  cumSamp <- cumsum(ySample)
+  diff <- abs(cumFull - cumSamp)
+  return(max(diff))
+}
 
 ##Turn into data.frame, bin each variable, combine into a label, scount by label
 ancVals <- as.data.table(getValues(ancDatSL))
@@ -178,16 +184,30 @@ ancQuants <- ancVals[,lapply(.SD,function(x){seq(min(x), max(x), length.out = 9)
 
 ##all transects
 n = 40
+# xMat <- st_drop_geometry(Xcost)
+# temp <- clhs(xMat,size = n,cost = ncol(xMat),iter = 5000,use.cpp = T,simple = F)
+# dat <- X[temp$index_samples,]
+# small <- foreach(j = 1:nrow(dat),.combine = rbind) %do% {
+#   tri <- Tri_build(id = j, x = st_coordinates(dat[j,])[1],y = st_coordinates(dat[j,])[2])
+#   tempDat <- ancDat$extract(tri)
+#   tempDat <- tempDat[[1]]
+#   tempDat
+# }
+# temp <- small[complete.cases(small),]
+
 xMat <- st_drop_geometry(Xcost)
-temp <- clhs(xMat,size = n,cost = ncol(xMat),iter = 5000,use.cpp = T,simple = F)
-dat <- X[temp$index_samples,]
-small <- foreach(j = 1:nrow(dat),.combine = rbind) %do% {
-  tri <- Tri_build(id = j, x = st_coordinates(dat[j,])[1],y = st_coordinates(dat[j,])[2])
-  tempDat <- ancDat$extract(tri)
-  tempDat <- tempDat[[1]]
-  tempDat
-}
-temp <- small[complete.cases(small),]
+  temp <- clhs(xMat,size = n,cost = ncol(xMat),iter = 5000,use.cpp = T,simple = F)
+  dat <- X[temp$index_samples,]
+  small <- foreach(j = 1:nrow(dat),.combine = c) %do% {
+    tri <- Tri_build(id = j, x = st_coordinates(dat[j,])[1],y = st_coordinates(dat[j,])[2])
+    tempDat <- ancDat$extract(tri,df = T)
+    tempDat[,length(tempDat)]
+  }
+  idxs <- which(idVals %in% small)
+  tempDat <- ancVals[idxs,]
+  sl_lhs <- clhs(tempDat, size = 15*n,iter = 10000,use.cpp = T,simple = F)
+  sl_lhs <- clhs(ancVals, size = 15*n,possible.sample = idxs,iter = 10000,use.cpp = T,simple = F)
+  temp <- sl_lhs$sampled_data
 
 sampDat <- as.data.table(temp)
 ##split into same bins as full data set
@@ -198,7 +218,7 @@ sampBin <- unite(sampDat,sampLHS,sep = "")
 sampBin[,sampLHS := as.numeric(sampLHS)]
 sampBin <- sampBin[,.(SampNum = .N), by = .(sampLHS)]##count
 ##merge to compare
-fullDat <- ancSmall
+fullDat <- copy(ancSmall)
 fullDat[sampBin, SampNum := i.SampNum, on = c(LHSVar = "sampLHS")]
 fullDat[is.na(SampNum), SampNum := 0]
 fullDat[,SampNum := SampNum/sum(SampNum)]
@@ -210,12 +230,7 @@ fullDat <- melt(fullDat, id.vars = c("LHSID","LHSVar"))
 ggplot(fullDat, aes(x = LHSID, y = value, col = variable))+
   geom_line()
 
-ks_stat <- function(yFull,ySample){
-  cumFull <- cumsum(yFull)
-  cumSamp <- cumsum(ySample)
-  diff <- abs(cumFull - cumSamp)
-  return(max(diff))
-}
+
 #################
 ###output selected bins to new spatial layer for review
 ## select non-bin values to NA

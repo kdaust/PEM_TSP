@@ -114,7 +114,7 @@ layerNamesLL <- c("DAH","LFC","MRVBF","BEC", "cost") ##need to change this if yo
 
 ancDatLL <- raster::stack(covars)
 proj4string(ancDatLL) <- "+init=epsg:3005"
-ancDatLL <- mask(ancDatLL,becLayer)
+#ancDatLL <- mask(ancDatLL,becLayer)
 
 # becLayer <- raster(paste0(covLoc,"/becRaster.tif"))
 # area <- 5
@@ -125,8 +125,8 @@ ancDatLL <- mask(ancDatLL,becLayer)
 # }
 # ancDatLL <- mask(ancDatLL,becLayer)
 
-LL_corr <- layerStats(ancDatLL, 'pearson', na.rm=T)
-corr_matrixLL <- LL_corr$'pearson correlation coefficient'
+# LL_corr <- layerStats(ancDatLL, 'pearson', na.rm=T)
+# corr_matrixLL <- LL_corr$'pearson correlation coefficient'
 
 ## stand level covariates (about 11 million r)
 SLcov <- c("twi.tif","valley_depth_2.tif","tca2.tif","swi_area_mod.tif","cov.tif","tpi.tif")
@@ -141,10 +141,10 @@ SL_corr <- layerStats(ancDatSL, 'pearson', na.rm=T)
 corr_matrixSL <- SL_corr$'pearson correlation coefficient'
 
 ##combine layers to compare correlation
-ancDatLL2 <- projectRaster(ancDatLL, ancDatSL, method = 'ngb')
-ancDatALL <- stack(ancDatSL, ancDatLL2)
-All_corr <- layerStats(ancDatALL, 'pearson', na.rm=T)
-corr_matrixAll <- All_corr$'pearson correlation coefficient'
+# ancDatLL2 <- projectRaster(ancDatLL, ancDatSL, method = 'ngb')
+# ancDatALL <- stack(ancDatSL, ancDatLL2)
+# All_corr <- layerStats(ancDatALL, 'pearson', na.rm=T)
+# corr_matrixAll <- All_corr$'pearson correlation coefficient'
 
 ## dem for transtion layer
 alt <- raster(paste0(covLoc, "/dem.tif"))
@@ -318,11 +318,17 @@ Xcost <- st_as_sf(fullSet)
 Xcost <- Xcost[!is.na(Xcost$X25m_DAH_3Class),]
 Xcost <- Xcost[!is.infinite(Xcost$layer),]
 
+tempID <- ancDatSL$twi
+tempID[] <- 1:(nrow(tempID)*ncol(tempID))
+names(tempID) <- "CellID"
+ancDatSL <- stack(ancDatSL,tempID)
 ancDatVL <- velox(ancDatSL) ##create velox object
 
 ###setup full LHS distribution for statistics
 ancVals <- as.data.table(getValues(ancDatSL))
 ancVals <- na.omit(ancVals)
+idVals <- ancVals$CellID
+ancVals[,CellID := NULL]
 ancBin <- ancVals[,lapply(.SD, function(x){cut(x,breaks = seq(min(x), max(x), length.out = 9),labels = F,include.lowest = T)})] ##put into 10 bins by quantile
 ancBin <- unite(ancBin, LHSVar, sep = "")
 ancBin[,LHSVar := as.numeric(LHSVar)]
@@ -362,14 +368,13 @@ createLHS <- function(X,n,ancDat){
   xMat <- st_drop_geometry(X)
   temp <- clhs(xMat,size = n,cost = NULL,iter = 5000,use.cpp = T,simple = F)
   dat <- X[temp$index_samples,]
-  small <- foreach(j = 1:nrow(dat),.combine = rbind) %do% {
+  small <- foreach(j = 1:nrow(dat),.combine = c) %do% {
     tri <- Tri_build(id = j, x = st_coordinates(dat[j,])[1],y = st_coordinates(dat[j,])[2])
-    tempDat <- ancDat$extract(tri)
-    tempDat <- tempDat[[1]]
-    tempDat
+    tempDat <- ancDat$extract(tri,df = T)
+    tempDat$X7
   }
-  small <- small[complete.cases(small),]
-  sl_lhs <- clhs(as.data.frame(small), size = 15*n, iter = 5000,use.cpp = T,simple = F)
+  idxs <- which(idVals %in% small)
+  sl_lhs <- clhs(ancVals, size = 15*n,possible.sample = idxs,iter = 5000,use.cpp = T,simple = F)
   temp <- sl_lhs$sampled_data
   return(temp)
 }
@@ -398,14 +403,13 @@ createCCLHS <- function(X,n,ancDat){
   xMat <- st_drop_geometry(X)
   temp <- clhs(xMat,size = n,cost = ncol(xMat),iter = 5000,use.cpp = T,simple = F)
   dat <- X[temp$index_samples,]
-  small <- foreach(j = 1:nrow(dat),.combine = rbind) %do% {
+  small <- foreach(j = 1:nrow(dat),.combine = c) %do% {
     tri <- Tri_build(id = j, x = st_coordinates(dat[j,])[1],y = st_coordinates(dat[j,])[2])
-    tempDat <- ancDat$extract(tri)
-    tempDat <- tempDat[[1]]
-    tempDat
+    tempDat <- ancDat$extract(tri,df = T)
+    tempDat[,length(tempDat)]
   }
-  small <- small[complete.cases(small),]
-  sl_lhs <- clhs(as.data.frame(small), size = 15*n, iter = 5000,use.cpp = T,simple = F)
+  idxs <- which(idVals %in% small)
+  sl_lhs <- clhs(ancVals, size = 15*n,possible.sample = idxs,iter = 10000,use.cpp = T,simple = F)
   temp <- sl_lhs$sampled_data
   return(temp)
 }
