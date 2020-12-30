@@ -180,6 +180,7 @@ rdsRast <- fasterize(rdsAll, allRast, field = "Values")
 
 alt2 <- projectRaster(alt,rdsRast,method = 'ngb')
 altAll <- merge(rdsRast, alt2)
+altSmall <- raster::aggregate(altAll, fact = 3L, fun = min)
 
 ## trasition function: if > 500, elevation, so get diff, else speed to select min
 trFn <- function(x){
@@ -205,6 +206,20 @@ tr1[adj] <- tr2[adj] ##tr1 values are now all conductance in h/metre
 
 acost <- accCost(tr1,start)
 plot(acost)
+
+##create smaller version for TSP
+rdIdx <- which(values(altSmall) < 100) ##which cells are for roads?
+slpIdx <- which(values(altSmall) > 500)
+adj <- adjacent(altSmall, cells = slpIdx, pairs = T, directions = 8)
+adj <- adj[!adj[,1] %in% rdIdx ,] ##remove roads inside area
+adj <- adj[!adj[,2] %in% rdIdx ,]
+
+tr <- transition(altSmall,trFn,directions = 8, symm = F) ##altDiff and speed (km/h)
+trSmall <- geoCorrection(tr) ##divided by 25 - slope and conductance (km/h/m)
+trSmall[adj] <- (3/5)*(6*exp(-3.5*abs(tr1[adj] + 0.08))) ##tobler's hiking function * 3/5 - gives km/h
+trSmall <- trSmall*1000 ##now roads are correct conductance (h/m), and walking in m/h
+tr2 <- geoCorrection(trSmall) ##have to geocorrect this part again
+trSmall[adj] <- tr2[adj] ##tr1 values are now all conductance in h/metre
 
 acost2 <- projectRaster(acost, ancDatSL)
 acost2 <- mask(acost2, alt)
@@ -457,8 +472,8 @@ collectStats <- function(X,sampleFun, nums,ancDat, testFun1 = ks_stat_clhs_v2,te
 ```
 
 ```{r run simulations}
-nums <- round(seq(5, 50, length.out = 10)) ##set sequence of transect number
-nums <- rep(nums, each = 10) ##replicates of each number (should be at least 5)
+nums <- round(seq(5, 70, length.out = 10)) ##set sequence of transect number
+nums <- rep(nums, each = 15) ##replicates of each number (should be at least 5)
 
 statsLHS_trans <- collectStats(X,createLHS,nums,ancDat = ancDatVL)
 statsLHS_trans$SType = "LHS"
@@ -482,137 +497,87 @@ ggplot(statsAll, aes(x = Num, y = fillQual, fill = SType))+
 KS_transectPlot <- ggplot(statsAll, aes(x = Num, y = KS, fill = SType))+
   geom_boxplot() +
   labs(x = "Number of Transects", y= "Kolmogorov-Smirnov statistic (0 = identical)")+
-  scale_fill_discrete(guide = guide_legend(reverse=FALSE), name='Sample Method', labels = c('cLHS- cLHS resampled', 'cost cLHS - cLHS resampled', 'cost cLHS systematic resampled'))+
+  scale_fill_discrete(guide = guide_legend(reverse=FALSE), name='Sample Method', labels = c('cLHS- cLHS resampled', 'cost cLHS - systematic resampled', 'cost cLHS - cLHS resampled'))+
   theme_few()
 plot(KS_transectPlot)
-ggsave("./Results/KS_transect_plot.jpeg", device = 'jpeg')
+#ggsave("./Results/KS_transect_plot.jpeg", device = 'jpeg')
 
 Bfill_transectPlot <- ggplot(statsAll, aes(x = Num, y = fillQual, fill = SType))+
   geom_boxplot() +
   labs(x = "Number of Transects", y= "Bins remaining to be filled")+
-  scale_fill_discrete(guide = guide_legend(reverse=FALSE), name='Sample Method', labels = c('cLHS- cLHS resampled', 'cost cLHS - cLHS resampled', 'cost cLHS systematic resampled'))+
+  scale_fill_discrete(guide = guide_legend(reverse=FALSE), name='Sample Method', labels = c('cLHS- cLHS resampled', 'cost cLHS - systematic resampled', 'cost cLHS - cLHS resampled'))+
   theme_few()
 plot(Bfill_transectPlot)
-ggsave("./Results/KS_transectPlot.jpeg", device = 'jpeg')
+#ggsave("./Results/KS_transectPlot.jpeg", device = 'jpeg')
 
 # smallSet <- as.matrix(smallSet)
 # test <- cramer.test(x = fullSL,y = smallSet, just.statistic = T)
 ```
-
-This next chunk is basically the same as above but using the TSP and allowing drops. I separated it because this part takes longer, so might not want to always run it.
+## Setup TSP timing
 
 ```{r}
-##function to make TSP
-createTSP <- function(X,n,ancDat){
-  xMat <- st_drop_geometry(X)
-  temp <- clhs(xMat,size = n,cost = ncol(xMat),iter = 5000,use.cpp = T, simple = F)
-  dat <- X[temp$index_samples,]
-
-  pnts <- dat
-  
-  p2 <- st_as_sf(pnts)
-  pnts <- pnts[,1]
-  colnames(pnts) <- c("name","geometry")
-  st_geometry(pnts) <- "geometry"
-  startPnts <- st_as_sf(data.frame(name = "Start",geometry = start_sf))
-  pnts <- rbind(pnts, startPnts)
-  pnts2 <- as(pnts, "Spatial")
-  
-  ## create distance matrix between sample points
-  test <- costDistance(tr1,pnts2,pnts2)
-  dMat2 <- as.matrix(test)
-  dMat2 <- dMat2*60
-  dMat2[is.infinite(dMat2)] <- 1000
-  
-  ##penalty based on quality of points
-  objVals <- temp$final_obj_continuous
-  objVals <- max(objVals) - objVals
-  
-  maxTime <- 8L ##hours
-  ## time per transect
-  plotTime <- 45L ##mins
-  temp <- dMat2[1:n,1:n]
-  maxDist <- sum(temp[upper.tri(temp)])
-  minPen <- maxDist * 1.5
-  maxPen <- maxDist * 5
-  objVals <- scales::rescale(objVals, to = c(minPen,maxPen))
-  objVals <- as.integer(objVals)
-  
-  ndays <- as.integer(ceiling(n/5)+1)
-  indStart <- as.integer(rep(n,ndays))
-  ##run vehicle routing problem from python script
-  ## GCS is global span cost coefficient
-  vrp <- py_mTSP(dat = dMat2,num_days = ndays, start = indStart, end = indStart, 
-                 max_cost = maxTime*60L, plot_time = plotTime, penalty =  objVals, arbDepot = F, GSC = 15L)
-  
-  result <- vrp[[1]]
-  idxs <- as.numeric(unlist(result))
-  idxs <- idxs[idxs != n]
-  idxs <- idxs+1
-  
-  dat <- pnts[idxs,]
-  small <- foreach(j = 1:nrow(dat),.combine = rbind) %do% {
-    tri <- Tri_build(id = j, x = st_coordinates(dat[j,])[1],y = st_coordinates(dat[j,])[2])
-    tempDat <- ancDat$extract(tri)
-    tempDat <- tempDat[[1]]
-    tempDat
+calcCost <- function(Xcost,n,nTry){
+  pkgs <- c("Rcpp","sf","data.table","raster","dplyr","reticulate","gdistance","scales","clhs")
+  tspTime <- foreach(i = 1:nTry,.combine = rbind, .packages = pkgs,
+                     .export = c("start_sf","trSmall")) %dopar% {
+    reticulate::source_python("mTSP.py")
+    xMat <- st_drop_geometry(Xcost)
+    temp <- clhs(xMat,size = n,cost = ncol(xMat),iter = 5000,use.cpp = T,simple = F)
+    pnts <- Xcost[temp$index_samples,]
+    pnts <- pnts[,1]
+    colnames(pnts) <- c("name","geometry")
+    st_geometry(pnts) <- "geometry"
+    startPnts <- st_as_sf(data.frame(name = "Start",geometry = start_sf))
+    pnts <- rbind(pnts, startPnts)
+    pnts2 <- as(pnts, "Spatial")
+    ## create distance matrix between sample points
+    test <- costDistance(trSmall,pnts2,pnts2)
+    dMat2 <- as.matrix(test)
+    dMat2 <- dMat2*60
+    dMat2[is.infinite(dMat2)] <- 1000
+    
+    ##penalty based on quality of points
+    objVals <- max(temp$final_obj_continuous) - temp$final_obj_continuous
+    maxTime <- 8L ##hours
+    ## time per transect
+    plotTime <- 50L ##mins
+    temp <- dMat2[1:n,1:n]
+    maxDist <- sum(temp[upper.tri(temp)])
+    minPen <- maxDist
+    maxPen <- maxDist * 4
+    objVals <- scales::rescale(objVals, to = c(minPen,maxPen))
+    objVals <- as.integer(objVals)
+    
+    ndays <- as.integer(ceiling(n/5)+1)
+    pen = objVals
+    
+    indStart <- as.integer(rep(n,ndays))
+    ##run vehicle routing problem from python script
+    ## GCS is global span cost coefficient
+    vrp <- py_mTSP(dat = dMat2,num_days = ndays, start = indStart, end = indStart, 
+                   max_cost = maxTime*60L, plot_time = plotTime, penalty =  pen, arbDepot = F, GSC = 5L)
+    time <- vrp[[2]]
+    totTime <- sum(as.numeric(unlist(time)))/480
+    num = length(as.numeric(unlist(vrp[[1]])))-2*length(vrp[[1]])
+    data.table(It = i, Cost = totTime, Num = num)
   }
-  small <- small[complete.cases(small),]
-  sl_lhs <- clhs(as.data.frame(small), size = 15*n, iter = 5000,use.cpp = T, simple = F)
-  temp <- sl_lhs$sampled_data
-  return(temp)
+  return(tspTime)
 }
 
-##run simulations
-pkgs <- c("Rcpp","LaplacesDemon", "foreach","sf",
-          "raster","LearnGeom","dplyr","reticulate","gdistance","scales","velox","clhs")
-statsTSP_trans <- foreach(n = nums, .combine = rbind, .packages = pkgs,
-                    .export = c("Tri_build","start_sf","tr1")) %dopar% { #
-                      reticulate::source_python("mTSP.py")
-                      smallSet <- createTSP(Xcost,n,ancDatVL)
-                      smallSet <- smallSet[complete.cases(smallSet),]
-                      if(nrow(smallSet) > 1){
-                        res1 <- sumKSTestTransect(ancDatVL,smallSet)
-                        res2 <- fillTest_Transect(ancDatVL,smallSet)
-                        data.frame(Num = n,KS = res1, fillQual = res2)
-                      }else{
-                        NULL
-                      }
-                      
-                }
+nums <- seq(5,40,by = 5)
+tspTest <- foreach(numRep = nums, .combine = rbind) %do% {
+  dat <- calcCost(Xcost, n = 30, nTry = numRep)
+  dat[,NumRep := numRep]
+  dat
+}
 
-statsTSP_trans$SType <- "TSP"
-#fwrite(statsTSP_trans, "TSPNumSave.csv")
-
-##combine with above chunk
-statsAll <- rbind(statsLHS_trans,statsCCLHS_trans,statsCCLHS_30m,statsTSP_trans)
-statsAll$Num <- as.factor(statsAll$Num)
-statsAll$SType <- as.factor(statsAll$SType)
-ggplot(statsAll, aes(x = Num, y = KS, fill = SType))+
-  geom_boxplot()
-ggplot(statsAll, aes(x = Num, y = fillQual, fill = SType))+
-  geom_boxplot()
-
-KS_transectPlot2 <- ggplot(statsAll, aes(x = Num, y = KS, fill = SType))+
-  geom_boxplot() +
-  labs(x = "Number of Transects", y= "Kolmogorov-Smirnov statistic (0 = identical)")+
-  scale_fill_discrete(guide = guide_legend(reverse=FALSE), name='Sample Method', labels = c('cLHS- cLHS resampled', 'cost cLHS - cLHS resampled', 'cost cLHS systematic resampled'))+
-  theme_few()
-plot(KS_transectPlot2)
-ggsave("./Results/KS_transect_plot2.jpeg", device = 'jpeg')
-
-Bfill_transectPlot2 <- ggplot(statsAll, aes(x = Num, y = fillQual, fill = SType))+
-  geom_boxplot() +
-  labs(x = "Number of Transects", y= "Bins remaining to be filled")+
-  scale_fill_discrete(guide = guide_legend(reverse=FALSE), name='Sample Method', labels = c('cLHS- cLHS resampled', 'cost cLHS - cLHS resampled', 'cost cLHS systematic resampled'))+
-  theme_few()
-plot(Bfill_transectPlot2)
-ggsave("./Results/KS_transectPlot2.jpeg", device = 'jpeg')
+tspSum <- tspTest[,.(MinTime = min(Cost)), by = .(NumRep)]
 ```
 
 ## Simulation 3: Sampling Time
 
 The previous chunks investigated how variable space filling changed with different sampling strategies. We now apply the same process, but collect results on the amount of time each plan would take (as determined by the TSP). We use similar sampling plans as in the above chunks: cost-constrained clhs, regular clhs, and TSP (same as cost-constrained clhs, but allowing dropped sites). As above, the simulation runs each scenario with increasing numbers of transects and multiple replications at each level.
+
 
 ```{r time cost}
 
@@ -767,4 +732,66 @@ LL <- LL %>% dplyr::select(mapunit1, mapunit2, '25m_MRVBF_', '25m_Landfo', '25m_
 DataExplorer::create_report(LL, y = "mapunit1")
 ```
 
+```{r}
+##function to make TSP
+createTSP <- function(X,n,numTry,ancDatVL){
+  xMat <- st_drop_geometry(X)
+  temp <- clhs(xMat,size = n,cost = ncol(xMat),iter = 5000,use.cpp = T, simple = F)
+  dat <- X[temp$index_samples,]
+
+  pnts <- dat
+  
+  p2 <- st_as_sf(pnts)
+  pnts <- pnts[,1]
+  colnames(pnts) <- c("name","geometry")
+  st_geometry(pnts) <- "geometry"
+  startPnts <- st_as_sf(data.frame(name = "Start",geometry = start_sf))
+  pnts <- rbind(pnts, startPnts)
+  pnts2 <- as(pnts, "Spatial")
+  
+  ## create distance matrix between sample points
+  test <- costDistance(tr1,pnts2,pnts2)
+  dMat2 <- as.matrix(test)
+  dMat2 <- dMat2*60
+  dMat2[is.infinite(dMat2)] <- 1000
+  
+  ##penalty based on quality of points
+  objVals <- temp$final_obj_continuous
+  objVals <- max(objVals) - objVals
+  
+  maxTime <- 8L ##hours
+  ## time per transect
+  plotTime <- 45L ##mins
+  temp <- dMat2[1:n,1:n]
+  maxDist <- sum(temp[upper.tri(temp)])
+  minPen <- maxDist * 1.5
+  maxPen <- maxDist * 5
+  objVals <- scales::rescale(objVals, to = c(minPen,maxPen))
+  objVals <- as.integer(objVals)
+  
+  ndays <- as.integer(ceiling(n/5)+1)
+  indStart <- as.integer(rep(n,ndays))
+  ##run vehicle routing problem from python script
+  ## GCS is global span cost coefficient
+  vrp <- py_mTSP(dat = dMat2,num_days = ndays, start = indStart, end = indStart, 
+                 max_cost = maxTime*60L, plot_time = plotTime, penalty =  objVals, arbDepot = F, GSC = 15L)
+  
+  result <- vrp[[1]]
+  idxs <- as.numeric(unlist(result))
+  idxs <- idxs[idxs != n]
+  idxs <- idxs+1
+  
+  dat <- pnts[idxs,]
+  small <- foreach(j = 1:nrow(dat),.combine = rbind) %do% {
+    tri <- Tri_build(id = j, x = st_coordinates(dat[j,])[1],y = st_coordinates(dat[j,])[2])
+    tempDat <- ancDat$extract(tri)
+    tempDat <- tempDat[[1]]
+    tempDat
+  }
+  small <- small[complete.cases(small),]
+  sl_lhs <- clhs(as.data.frame(small), size = 15*n, iter = 5000,use.cpp = T, simple = F)
+  temp <- sl_lhs$sampled_data
+  return(temp)
+}
+```
 
