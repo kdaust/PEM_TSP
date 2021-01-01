@@ -111,14 +111,11 @@ covLoc <- here("Covariates") ## Too big for git data
 covars <- paste(covLoc, c("25m_DAH_3Class.tif","25m_LandformClass_Default_Seive4.tif",
                           "25m_MRVBF_Classified_IS64Low6Up2.tif","becRaster.tif"), sep = "/")# ,"DEM_25m.tif"
 layerNamesLL <- c("DAH","LFC","MRVBF","BEC", "cost") ##need to change this if you change the layers
-#becLayer <- raster(paste(covLoc,"becRaster.tif", sep = "/")) ## use these will apply to only a single BGC
+becLayer <- raster(paste(covLoc,"becRaster.tif", sep = "/")) ## use these will apply to only a single BGC
 #becLayer[becLayer != 3] <- NA
 ancDatLL <- raster::stack(covars)
 proj4string(ancDatLL) <- "+init=epsg:3005"
-#ancDatLL <- mask(ancDatLL,becLayer)
-
-LL_corr <- layerStats(ancDatLL, 'pearson', na.rm=T)
-corr_matrixLL <- LL_corr$'pearson correlation coefficient'
+ancDatLL <- mask(ancDatLL,becLayer)
 
 ## stand level covariates (about 11 million r)
 SLcov <- c("twi.tif","valley_depth_2.tif","tca2.tif","swi_area_mod.tif","tpi.tif")
@@ -126,7 +123,7 @@ covars <- paste(covLoc, SLcov, sep = "/")
 layerNamesSl <- c("twi","valley","tca2","swi","tpi") ##need to change this if you change the layers
 ancDatSL <- raster::stack(covars)
 proj4string(ancDatSL) <- "+init=epsg:3005"
-#ancDatSL <- mask(ancDatSL, becLayer)
+ancDatSL <- mask(ancDatSL, becLayer)
 
 ancDatLL_cost <- stack(ancDatLL,acost2)
 fullSet <- sampleRegular(ancDatLL, size = 100000,sp = T) 
@@ -166,24 +163,24 @@ ancQuants <- ancVals[,lapply(.SD,function(x){seq(min(x), max(x), length.out = 9)
 # temp <- temp$sampled_data
 
 ## Transects regular resample
-# n = 40
-# xMat <- st_drop_geometry(Xcost)
-# temp <- clhs(xMat,size = n,cost = ncol(xMat),iter = 5000,use.cpp = T,simple = F)
-# dat <- X[temp$index_samples,]
-# small <- foreach(j = 1:nrow(dat),.combine = rbind) %do% {
-#   tri <- Tri_build(id = j, x = st_coordinates(dat[j,])[1],y = st_coordinates(dat[j,])[2])
-#   tPs <- st_sample(tri, size = 15, type = "regular")
-#   temp <- suppressWarnings(st_sf(data.frame(id = j, geometry = tPs)) %>%
-#      st_cast("POINT"))
-#   temp
-#   
-# }
-# small <- st_as_sf(small)
-# temp <- ancDat$extract_points(small)
-# temp <- temp[!is.na(temp[1,]),]
-
-##all transects
 n = 40
+xMat <- st_drop_geometry(Xcost)
+temp <- clhs(xMat,size = n,cost = ncol(xMat),iter = 5000,use.cpp = T,simple = F)
+dat <- Xcost[temp$index_samples,]
+small <- foreach(j = 1:nrow(dat),.combine = rbind) %do% {
+  tri <- Tri_build(id = j, x = st_coordinates(dat[j,])[1],y = st_coordinates(dat[j,])[2])
+  tPs <- st_sample(tri, size = 15, type = "regular")
+  temp <- suppressWarnings(st_sf(data.frame(id = j, geometry = tPs)) %>%
+     st_cast("POINT"))
+  temp
+
+}
+small <- st_as_sf(small)
+temp <- ancDat$extract_points(small)
+temp <- temp[complete.cases(temp),]
+temp <- temp[,-ncol(temp)]
+##all transects
+n = 10
 # xMat <- st_drop_geometry(Xcost)
 # temp <- clhs(xMat,size = n,cost = ncol(xMat),iter = 5000,use.cpp = T,simple = F)
 # dat <- X[temp$index_samples,]

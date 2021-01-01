@@ -30,34 +30,9 @@ The below chunk creates some generic statistical functions
 ```{r source}
 source_python("./mTSP.py")
 
-##Kolmogorov-Smirnov test
-sumKSTest <- function(full,small){
-  out <- 0
-  for(i in 1:ncol(full)){
-    ks <- suppressWarnings(ks.test(full[,i],small[,i]))
-    out <- out+ks$statistic
-  } 
-  return(out)
-}
-
-sumKSTestTransect <- function(full,small){
-  out <- 0
-  for(i in 1:full$nbands){
-    ks <- suppressWarnings(ks.test(full$rasterbands[[i]],small[,i]))
-    out <- out+ks$statistic
-  } 
-  return(out)
-}
-
-# adTest <- function(full,small){
-#   out <- 0
-#   for(i in 1:ncol(full)){
-#     fn <- ecdf(full[,i])
-#     temp <- ad.test(small[,i], null = fn)
-#     out <- out + temp$statistic
-#   }
-#   return(out)
-# }
+require(doParallel)
+cl <- makePSOCKcluster(detectCores()-2)
+registerDoParallel(cl)
 
 fillTest <- function(full, small){
   strata <- apply(
@@ -114,9 +89,10 @@ layerNamesLL <- c("DAH","LFC","MRVBF","BEC", "cost") ##need to change this if yo
 
 ancDatLL <- raster::stack(covars)
 proj4string(ancDatLL) <- "+init=epsg:3005"
-#ancDatLL <- mask(ancDatLL,becLayer)
+becLayer <- raster(paste0(covLoc,"/becRaster.tif"))
+ancDatLL <- mask(ancDatLL,becLayer)
 
-# becLayer <- raster(paste0(covLoc,"/becRaster.tif"))
+
 # area <- 5
 # if(area == "all"){
 #   becLayer[!is.na(becLayer)] <- 1
@@ -129,16 +105,16 @@ proj4string(ancDatLL) <- "+init=epsg:3005"
 # corr_matrixLL <- LL_corr$'pearson correlation coefficient'
 
 ## stand level covariates (about 11 million r)
-SLcov <- c("twi.tif","valley_depth_2.tif","tca2.tif","swi_area_mod.tif","cov.tif","tpi.tif")
+SLcov <- c("twi.tif","valley_depth_2.tif","tca2.tif","swi_area_mod.tif","tpi.tif")
 covars <- paste(covLoc, SLcov, sep = "/")
-layerNamesSl <- c("twi","valley","tca2","swi","cov","tpi") ##need to change this if you change the layers
+layerNamesSl <- c("twi","valley","tca2","swi","tpi") ##need to change this if you change the layers
 ancDatSL <- raster::stack(covars)
 proj4string(ancDatSL) <- "+init=epsg:3005"
 
 # ancDatSL <- mask(ancDatSL,becLayer)
 
-SL_corr <- layerStats(ancDatSL, 'pearson', na.rm=T)
-corr_matrixSL <- SL_corr$'pearson correlation coefficient'
+# SL_corr <- layerStats(ancDatSL, 'pearson', na.rm=T)
+# corr_matrixSL <- SL_corr$'pearson correlation coefficient'
 
 ##combine layers to compare correlation
 # ancDatLL2 <- projectRaster(ancDatLL, ancDatSL, method = 'ngb')
@@ -230,12 +206,103 @@ ancDatSL_cost <- stack(ancDatSL,acost2)
 
 For all the following simulations we're testing with random samples, LHS samples, CCLHS samples and sometimes TSP sampling (not for single points).
 
-There are different ways of testing space filling: in the below code, we use KS statistics, a simple bin fill function, and the AD test (doesn't seem to work well)
+There are different ways of testing space filling: in the below code, we use KS statistics, a simple bin fill function
+
+```{r setup distribtuion and test functions}
+ancDatSL <- raster::stack(covars)
+tempID <- ancDatSL$twi
+tempID[] <- 1:(nrow(tempID)*ncol(tempID))
+names(tempID) <- "CellID"
+ancDatSL <- stack(ancDatSL,tempID)
+ancDatVL <- velox(ancDatSL) ##create velox object
+
+###setup full LHS distribution for statistics
+ancVals <- as.data.table(getValues(ancDatSL))##table of SL data
+ancVals <- na.omit(ancVals)
+idVals <- ancVals$CellID
+ancVals[,CellID := NULL]
+ancBin <- ancVals[,lapply(.SD, function(x){cut(x,breaks = seq(min(x), max(x), length.out = 9),labels = F,include.lowest = T)})] ##put into 10 bins by quantile
+ancBin <- unite(ancBin, LHSVar, sep = "")
+ancBin[,LHSVar := as.numeric(LHSVar)]
+ancBin <- ancBin[,.(Num = .N), by = .(LHSVar)] ##count occurences
+ancSmall <- ancBin[Num > 99,] ##remove uncommon
+setorder(ancSmall,-Num)
+plot(ancSmall$Num, type = "l")
+ancQuants <- ancVals[,lapply(.SD,function(x){seq(min(x), max(x), length.out = 9)})] ##save quantiles of full set
+
+##function to test KS statistic of LHS distribution
+ks_stat_clhs <- function(sample,fullDat,fullBreaks){
+  sampDat <- as.data.table(sample)
+  sampDat <- na.omit(sampDat)
+  ##split into same bins as full data set
+  for(i in 1:ncol(sampDat)){
+    sampDat[[i]] <- cut(sampDat[[i]],breaks = fullBreaks[[i]], labels = F, include.lowest = T)
+  }
+  sampBin <- unite(sampDat,sampLHS,sep = "")
+  sampBin[,sampLHS := as.numeric(sampLHS)]
+  sampBin <- sampBin[,.(SampNum = .N), by = .(sampLHS)]##count
+  ##merge to compare
+  fullDat[sampBin, SampNum := i.SampNum, on = c(LHSVar = "sampLHS")]
+  fullDat[is.na(SampNum), SampNum := 0]
+  fullDat[,SampNum := SampNum/sum(SampNum)]
+  fullDat[,Num := Num/sum(Num)]
+  tempMat <- rbind(fullDat$Num,fullDat$SampNum)
+  kl2 <- KL(tempMat)
+  return(kl2)
+}
+
+{
+  sampDat <- as.data.table(temp)
+  ##split into same bins as full data set
+  for(i in 1:ncol(sampDat)){
+    sampDat[[i]] <- cut(sampDat[[i]],breaks = ancQuants[[i]], labels = F, include.lowest = T)
+  }
+  sampBin <- unite(sampDat,sampLHS,sep = "")
+  sampBin[,sampLHS := as.numeric(sampLHS)]
+  sampBin <- sampBin[,.(SampNum = .N), by = .(sampLHS)]##count
+  ##merge to compare
+  fullDat <- copy(ancSmall)
+  fullDat[sampBin, SampNum := i.SampNum, on = c(LHSVar = "sampLHS")]
+  fullDat[is.na(SampNum), SampNum := 0]
+  fullDat[,SampNum := SampNum/sum(SampNum)]
+  fullDat[,Num := Num/sum(Num)]
+  tempMat <- rbind(fullDat$Num,fullDat$SampNum)
+  kl2 <- KL(tempMat)
+  fullDat[,LHSID := seq_along(Num)]
+  fullDat <- melt(fullDat, id.vars = c("LHSID","LHSVar"))
+  ggplot(fullDat, aes(x = LHSID, y = value, col = variable))+
+    geom_line()
+
+}
+
+##similar to above but slightly different implimentation
+ks_stat_clhs_v2 <- function(sample,fullDat,fullBreaks){
+  sampDat <- as.data.table(sample)
+  ##split into same bins as full data set
+  for(i in 1:ncol(sampDat)){
+    sampDat[[i]] <- cut(sampDat[[i]],breaks = fullBreaks[[i]], labels = F, include.lowest = T)
+  }
+  sampBin <- unite(sampDat,sampLHS,sep = "")
+  sampBin[,sampLHS := as.numeric(sampLHS)]
+  sampBin <- sampBin[,.(SampNum = .N), by = .(sampLHS)]##count
+  ##merge to compare
+  fullDat[sampBin, SampNum := i.SampNum, on = c(LHSVar = "sampLHS")]
+  fullDat[is.na(SampNum), SampNum := 0]
+  fullDat[,SampNum := SampNum/sum(SampNum)]
+  fullDat[,Num := Num/sum(Num)]
+  fullDat[,LHSID := seq_along(Num)]
+  fullDat[,Diff := Num - SampNum]
+  return(sum(abs(fullDat$Diff)))
+}
+
+```
+
 
 ```{r single point}
 fullSet <- sampleRegular(ancDatSL, size = 100000,useGDAL = T)
 X <- fullSet
 X <- X[complete.cases(X),] ##this reduces from 100,000 tp 3700 in one example
+X <- X[,-ncol(X)]
 
 fullSet <- sampleRegular(ancDatSL_cost, size = 100000,useGDAL = T)
 Xcost <- fullSet
@@ -248,34 +315,31 @@ createRandom <- function(X,n){
 }
 
 createLHS <- function(X,n){
-  temp <- clhs(X,size = n, cost = NULL, use.cpp = T, iter = 5000, simple = F)
-  small <- as.matrix(temp$sampled_data)
-  return(small)
-}
-createCCLHS <- function(X,n){
-  temp <- clhs(X,size = n,cost = ncol(X),use.cpp = T, iter = 1000,simple = F)
+  temp <- clhs(X,size = n, cost = NULL, use.cpp = T, iter = 10000, simple = F)
   small <- as.matrix(temp$sampled_data)
   return(small)
 }
 
-require(doParallel)
-cl <- makePSOCKcluster(detectCores()-2)
-registerDoParallel(cl)
+createCCLHS <- function(X,n){
+  temp <- clhs(X,size = n,cost = ncol(X),use.cpp = T, iter = 10000,simple = F)
+  small <- as.matrix(temp$sampled_data)
+  return(small)
+}
 
 ##collecting stats with different space filling tests
-collectStats <- function(X,sampleFun,nums,testFun1 = sumKSTest,testFun2 = fillTest){
+collectStats <- function(X,sampleFun,nums,testFun1 = ks_stat_clhs_v2,testFun2 = fillTest){
   test_res <- foreach(n = nums, .combine = rbind, 
-                    .packages = c("Rcpp","LaplacesDemon","foreach","goftest","clhs")) %dopar% {
+                    .packages = c("Rcpp","philentropy","foreach","clhs"),
+                    .export = c("ancQuants","ancSmall","idVals","ancVals")) %dopar% {
                       smallSet <- sampleFun(as.data.frame(X),n)
-                      res1 <- testFun1(X[,1:6],smallSet)
-                      res2 <- testFun2(X[,1:6], smallSet)
-                      #res3 <- testFun3(X[,1:6], smallSet)
+                      res1 <- testFun1(sample = smallSet,fullDat = ancSmall,fullBreaks = ancQuants)
+                      res2 <- testFun2(X[,1:5], smallSet)
                       data.frame(Num = n,KS = res1, fill = res2)
                     }
   return(test_res)
 }
 
-nums <- round(seq(10, 800, length.out = 10))
+nums <- round(seq(10, 800, length.out = 15))
 nums <- rep(nums, each = 5)
 statsRand <- collectStats(X,createRandom,nums)
 statsRand$SType <- "Random"
@@ -288,31 +352,38 @@ statsAll <- rbind(statsRand,statsLHS,statsCCLHS)
 statsAll$Num <- as.factor(statsAll$Num)
 statsAll$SType <- as.factor(statsAll$SType)
 
-# ggplot(statsAll, aes(x = Num, y = KS, fill = SType))+
-#   geom_boxplot()
-# ggplot(statsAll, aes(x = Num, y = fill, fill = SType))+
-#   geom_boxplot()
+ggplot(statsAll, aes(x = Num, y = KS, fill = SType))+
+  geom_boxplot()
+ggplot(statsAll, aes(x = Num, y = fill, fill = SType))+
+  geom_boxplot()
 
+# statsAll <- as.data.table(statsAll)
+# statsAll[, Norm := (KS-min(KS))/(max(KS)-min(KS))]
+# statsAll[,Norm := 1-Norm]
+# KSplot <- ggplot(statsAll, aes(x = Num, y = Norm, fill = SType))+
+#   geom_boxplot() +
+#   labs(x = "Minimum Number of Training Points", y= "Kolmogorov-Smirnov statistic")+ 
+#   scale_fill_discrete(guide = guide_legend(reverse=TRUE), name='Sample Method', labels = c('cost cLHS', 'cLHS', 'random'))+
+#   theme_few()
+# plot(KSplot)
+# ggsave("./Results/K-S Plot.jpeg", device = 'jpeg')
+# 
+# binfillplot <- ggplot(statsAll, aes(x = Num, y = fill, fill = SType))+
+#   geom_boxplot() +
+#   labs(x = "Minimum Number of Training Points", y= "Bins remaining to be filled")+ 
+#   scale_fill_discrete(guide = guide_legend(reverse=TRUE), name='Sample Method', labels = c('cost cLHS', 'cLHS', 'random'))+
+#   theme_few()
+# plot(binfillplot)
+# ggsave("./Results/Bin fill Plot.jpeg", device = 'jpeg')
+```
+
+```{r num single points}
 statsAll <- as.data.table(statsAll)
-statsAll[, Norm := (KS-min(KS))/(max(KS)-min(KS))]
-statsAll[,Norm := 1-Norm]
-KSplot <- ggplot(statsAll, aes(x = Num, y = Norm, fill = SType))+
-  geom_boxplot() +
-  labs(x = "Minimum Number of Training Points", y= "Kolmogorov-Smirnov statistic")+ 
-  scale_fill_discrete(guide = guide_legend(reverse=TRUE), name='Sample Method', labels = c('cost cLHS', 'cLHS', 'random'))+
-  theme_few()
-plot(KSplot)
-ggsave("./Results/K-S Plot.jpeg", device = 'jpeg')
+temp <- statsAll[,.(y = median(KS)), by = .(SType,Num)]
+temp[,`:=`(y = (y-min(y))/(max(y)-min(y)), Num = as.numeric(as.character(Num)))]
+numPoints <- temp[,.(nPoints = predict(loess(Num ~ y,data = .SD), data.frame(y = 0.1))), by = .(SType)]
 
-binfillplot <- ggplot(statsAll, aes(x = Num, y = fill, fill = SType))+
-  geom_boxplot() +
-  labs(x = "Minimum Number of Training Points", y= "Bins remaining to be filled")+ 
-  scale_fill_discrete(guide = guide_legend(reverse=TRUE), name='Sample Method', labels = c('cost cLHS', 'cLHS', 'random'))+
-  theme_few()
-plot(binfillplot)
-ggsave("./Results/Bin fill Plot.jpeg", device = 'jpeg')
-
-
+knitr::kable(numPoints, digits = 2, caption = "Number of points need for 90% of maximum space filling")
 ```
 
 ### Simulation 2: Transect Sampling
@@ -332,83 +403,21 @@ fullSet <- sampleRegular(ancDatLL_cost, size = 100000,sp = T)
 Xcost <- st_as_sf(fullSet)
 Xcost <- Xcost[!is.na(Xcost$X25m_DAH_3Class),]
 Xcost <- Xcost[!is.infinite(Xcost$layer),]
-
-tempID <- ancDatSL$twi
-tempID[] <- 1:(nrow(tempID)*ncol(tempID))
-names(tempID) <- "CellID"
-ancDatSL <- stack(ancDatSL,tempID)
-ancDatVL <- velox(ancDatSL) ##create velox object
-
-###setup full LHS distribution for statistics
-ancVals <- as.data.table(getValues(ancDatSL))
-ancVals <- na.omit(ancVals)
-idVals <- ancVals$CellID
-ancVals[,CellID := NULL]
-ancBin <- ancVals[,lapply(.SD, function(x){cut(x,breaks = seq(min(x), max(x), length.out = 9),labels = F,include.lowest = T)})] ##put into 10 bins by quantile
-ancBin <- unite(ancBin, LHSVar, sep = "")
-ancBin[,LHSVar := as.numeric(LHSVar)]
-ancBin <- ancBin[,.(Num = .N), by = .(LHSVar)] ##count occurences
-ancSmall <- ancBin[Num > 99,] ##remove uncommon
-setorder(ancSmall,-Num)
-plot(ancSmall$Num, type = "l")
-ancQuants <- ancVals[,lapply(.SD,function(x){seq(min(x), max(x), length.out = 9)})] ##save quantiles of full set
-
-##function to test KS statistic of LHS distribution
-ks_stat_clhs <- function(sample,fullDat,fullBreaks){
-  sampDat <- as.data.table(sample)
-  ##split into same bins as full data set
-  for(i in 1:ncol(sampDat)){
-    sampDat[[i]] <- cut(sampDat[[i]],breaks = ancQuants[[i]], labels = F, include.lowest = T)
-  }
-  sampBin <- unite(sampDat,sampLHS,sep = "")
-  sampBin[,sampLHS := as.numeric(sampLHS)]
-  sampBin <- sampBin[,.(SampNum = .N), by = .(sampLHS)]##count
-  ##merge to compare
-  fullDat[sampBin, SampNum := i.SampNum, on = c(LHSVar = "sampLHS")]
-  fullDat[is.na(SampNum), SampNum := 0]
-  fullDat[,SampNum := SampNum/sum(SampNum)]
-  fullDat[,Num := Num/sum(Num)]
-  fullDat[,LHSID := seq_along(Num)]
-  cumFull <- cumsum(fullDat$Num)
-  cumSamp <- cumsum(fullDat$SampNum)
-  diff <- abs(cumFull - cumSamp)
-  return(max(diff))
-}
-
-ks_stat_clhs_v2 <- function(sample,fullDat,fullBreaks){
-  sampDat <- as.data.table(sample)
-  ##split into same bins as full data set
-  for(i in 1:ncol(sampDat)){
-    sampDat[[i]] <- cut(sampDat[[i]],breaks = ancQuants[[i]], labels = F, include.lowest = T)
-  }
-  sampBin <- unite(sampDat,sampLHS,sep = "")
-  sampBin[,sampLHS := as.numeric(sampLHS)]
-  sampBin <- sampBin[,.(SampNum = .N), by = .(sampLHS)]##count
-  ##merge to compare
-  fullDat[sampBin, SampNum := i.SampNum, on = c(LHSVar = "sampLHS")]
-  fullDat[is.na(SampNum), SampNum := 0]
-  fullDat[,SampNum := SampNum/sum(SampNum)]
-  fullDat[,Num := Num/sum(Num)]
-  fullDat[,LHSID := seq_along(Num)]
-  fullDat[,Diff := Num - SampNum]
-  return(mean(abs(fullDat$Diff)))
-}
-
 ```
 
 ```{r sampling functions}
 ###create LHS transect sample, use clhs to sample transects
 createLHS <- function(X,n,ancDat){
   xMat <- st_drop_geometry(X)
-  temp <- clhs(xMat,size = n,cost = NULL,iter = 5000,use.cpp = T,simple = F)
+  temp <- clhs(xMat,size = n,cost = NULL,iter = 10000,use.cpp = T,simple = F)
   dat <- X[temp$index_samples,]
   small <- foreach(j = 1:nrow(dat),.combine = c) %do% {
     tri <- Tri_build(id = j, x = st_coordinates(dat[j,])[1],y = st_coordinates(dat[j,])[2])
     tempDat <- ancDat$extract(tri,df = T)
-    tempDat$X7
+    tempDat[,ncol(tempDat)]
   }
   idxs <- which(idVals %in% small)
-  sl_lhs <- clhs(ancVals, size = 15*n,possible.sample = idxs,iter = 5000,use.cpp = T,simple = F)
+  sl_lhs <- clhs(ancVals, size = 15*n,possible.sample = idxs,iter = 10000,use.cpp = T,simple = F)
   temp <- sl_lhs$sampled_data
   return(temp)
 }
@@ -416,7 +425,7 @@ createLHS <- function(X,n,ancDat){
 ##create cclhs sample, extract points @ 50m intervals
 createCCLHS_30m <- function(X,n,ancDat){
   xMat <- st_drop_geometry(X)
-  temp <- clhs(xMat,size = n,cost = ncol(xMat),iter = 5000,use.cpp = T,simple = F)
+  temp <- clhs(xMat,size = n,cost = ncol(xMat),iter = 10000,use.cpp = T,simple = F)
   dat <- X[temp$index_samples,]
   small <- foreach(j = 1:nrow(dat),.combine = rbind) %do% {
     tri <- Tri_build(id = j, x = st_coordinates(dat[j,])[1],y = st_coordinates(dat[j,])[2])
@@ -428,7 +437,7 @@ createCCLHS_30m <- function(X,n,ancDat){
   }
   small <- st_as_sf(small)
   temp <- ancDat$extract_points(small)
-  temp <- temp[!is.na(temp[1,]),]
+  temp <- temp[!is.na(temp[,1]),]
   temp <- temp[,-ncol(temp)]
   return(temp)
 }
@@ -436,12 +445,12 @@ createCCLHS_30m <- function(X,n,ancDat){
 ##create cclhs transects, sample using lhs
 createCCLHS <- function(X,n,ancDat){
   xMat <- st_drop_geometry(X)
-  temp <- clhs(xMat,size = n,cost = ncol(xMat),iter = 5000,use.cpp = T,simple = F)
+  temp <- clhs(xMat,size = n,cost = ncol(xMat),iter = 10000,use.cpp = T,simple = F)
   dat <- X[temp$index_samples,]
   small <- foreach(j = 1:nrow(dat),.combine = c) %do% {
     tri <- Tri_build(id = j, x = st_coordinates(dat[j,])[1],y = st_coordinates(dat[j,])[2])
     tempDat <- ancDat$extract(tri,df = T)
-    tempDat[,length(tempDat)]
+    tempDat[,ncol(tempDat)]
   }
   idxs <- which(idVals %in% small)
   sl_lhs <- clhs(ancVals, size = 15*n,possible.sample = idxs,iter = 10000,use.cpp = T,simple = F)
@@ -451,7 +460,7 @@ createCCLHS <- function(X,n,ancDat){
 
 ##function to run simulations
 collectStats <- function(X,sampleFun, nums,ancDat, testFun1 = ks_stat_clhs_v2,testFun2 = fillTest_Transect){
-  pkgs <- c("Rcpp","LaplacesDemon", "foreach","sf",
+  pkgs <- c("Rcpp","philentropy", "foreach","sf",
           "raster","LearnGeom","dplyr","reticulate","gdistance","scales","velox","clhs","data.table","tidyr")
   test_res <- foreach(n = nums, .combine = rbind, .packages = pkgs,
                     .export = c("Tri_build","ancQuants","ancSmall","idVals","ancVals")) %dopar% { #
@@ -486,7 +495,7 @@ statsCCLHS_30m <- collectStats(Xcost, createCCLHS_30m, nums, ancDat = ancDatVL)
 statsCCLHS_30m$SType <- "CCLHSReg"
 
 ##plot
-statsAll <- rbind(statsLHS_trans,statsCCLHS_trans,statsCCLHS_30m)
+statsAll <- rbind(statsLHS_trans, statsCCLHS_trans,statsCCLHS_30m)
 statsAll$Num <- as.factor(statsAll$Num)
 statsAll$SType <- as.factor(statsAll$SType)
 ggplot(statsAll, aes(x = Num, y = KS, fill = SType))+
@@ -494,26 +503,50 @@ ggplot(statsAll, aes(x = Num, y = KS, fill = SType))+
 ggplot(statsAll, aes(x = Num, y = fillQual, fill = SType))+
   geom_boxplot()
 
-KS_transectPlot <- ggplot(statsAll, aes(x = Num, y = KS, fill = SType))+
-  geom_boxplot() +
-  labs(x = "Number of Transects", y= "Kolmogorov-Smirnov statistic (0 = identical)")+
-  scale_fill_discrete(guide = guide_legend(reverse=FALSE), name='Sample Method', labels = c('cLHS- cLHS resampled', 'cost cLHS - systematic resampled', 'cost cLHS - cLHS resampled'))+
-  theme_few()
-plot(KS_transectPlot)
-#ggsave("./Results/KS_transect_plot.jpeg", device = 'jpeg')
+fwrite(statsAll,"statsAll_save.csv")
 
-Bfill_transectPlot <- ggplot(statsAll, aes(x = Num, y = fillQual, fill = SType))+
-  geom_boxplot() +
-  labs(x = "Number of Transects", y= "Bins remaining to be filled")+
-  scale_fill_discrete(guide = guide_legend(reverse=FALSE), name='Sample Method', labels = c('cLHS- cLHS resampled', 'cost cLHS - systematic resampled', 'cost cLHS - cLHS resampled'))+
-  theme_few()
-plot(Bfill_transectPlot)
+# KS_transectPlot <- ggplot(statsAll, aes(x = Num, y = KS, fill = SType))+
+#   geom_boxplot() +
+#   labs(x = "Number of Transects", y= "Kolmogorov-Smirnov statistic (0 = identical)")+
+#   scale_fill_discrete(guide = guide_legend(reverse=FALSE), name='Sample Method', labels = c('cLHS- cLHS resampled', 'cost cLHS - systematic resampled', 'cost cLHS - cLHS resampled'))+
+#   theme_few()
+# plot(KS_transectPlot)
+# #ggsave("./Results/KS_transect_plot.jpeg", device = 'jpeg')
+# 
+# Bfill_transectPlot <- ggplot(statsAll, aes(x = Num, y = fillQual, fill = SType))+
+#   geom_boxplot() +
+#   labs(x = "Number of Transects", y= "Bins remaining to be filled")+
+#   scale_fill_discrete(guide = guide_legend(reverse=FALSE), name='Sample Method', labels = c('cLHS- cLHS resampled', 'cost cLHS - systematic resampled', 'cost cLHS - cLHS resampled'))+
+#   theme_few()
+# plot(Bfill_transectPlot)
 #ggsave("./Results/KS_transectPlot.jpeg", device = 'jpeg')
 
 # smallSet <- as.matrix(smallSet)
 # test <- cramer.test(x = fullSL,y = smallSet, just.statistic = T)
 ```
-## Setup TSP timing
+
+## Calculate number of sites to fill
+
+```{r num points}
+temp <- statsAll[,.(y = median(KS)), by = .(SType,Num)]
+temp[,`:=`(y = (y-min(y))/(max(y)-min(y)), Num = as.numeric(as.character(Num)))]
+numTrans <- temp[,.(nTrans = predict(loess(Num ~ y,data = .SD), data.frame(y = 0.1))), by = .(SType)]
+
+knitr::kable(numTrans, digits = 2, caption = "Number of transects need for 90% of maximum space filling")
+
+# calcNumTrans <- function(tempDat){
+#   temp <- tempDat[,.(y = median(fillQual)), by = .(Num)]
+#   temp[,`:=`(y = (y-min(y))/(max(y)-min(y)), Num = as.numeric(as.character(Num)))]
+#   l2 <- loess(Num ~ y, data = temp)
+#   numTrans <- predict(l2,data.frame(y = 0.15))
+#   return(numTrans)
+# }
+# 
+# statsAll <- as.data.table(statsAll)
+# numTrans <- statsAll[,.(Num90 = calcNumTrans(.SD)), by = .(SType)]
+```
+
+## Number of TSP iterations needed
 
 ```{r}
 calcCost <- function(Xcost,n,nTry){
@@ -578,11 +611,9 @@ tspSum <- tspTest[,.(MinTime = min(Cost)), by = .(NumRep)]
 
 The previous chunks investigated how variable space filling changed with different sampling strategies. We now apply the same process, but collect results on the amount of time each plan would take (as determined by the TSP). We use similar sampling plans as in the above chunks: cost-constrained clhs, regular clhs, and TSP (same as cost-constrained clhs, but allowing dropped sites). As above, the simulation runs each scenario with increasing numbers of transects and multiple replications at each level.
 
-
 ```{r time cost}
-
 ##create TSP to calculate time
-calcCost <- function(pnts,objVals,dropAllowed){
+calcCost_clhs <- function(pnts,objVals,plotTime = 50L, minPerDay = 3L){
   n = nrow(pnts)
   p2 <- st_as_sf(pnts)
   pnts <- pnts[,1]
@@ -593,7 +624,7 @@ calcCost <- function(pnts,objVals,dropAllowed){
   pnts2 <- as(pnts, "Spatial")
   
   ## create distance matrix between sample points
-  test <- costDistance(tr1,pnts2,pnts2)
+  test <- costDistance(trSmall,pnts2,pnts2)
   dMat2 <- as.matrix(test)
   dMat2 <- dMat2*60
   dMat2[is.infinite(dMat2)] <- 1000
@@ -603,22 +634,16 @@ calcCost <- function(pnts,objVals,dropAllowed){
   
   maxTime <- 8L ##hours
   ## time per transect
-  plotTime <- 45L ##mins
   temp <- dMat2[1:n,1:n]
   maxDist <- sum(temp[upper.tri(temp)])
   minPen <- maxDist
   maxPen <- maxDist * 4
   objVals <- scales::rescale(objVals, to = c(minPen,maxPen))
   objVals <- as.integer(objVals)
-  
-  if(dropAllowed){
-    ndays <- as.integer(ceiling(n/5)+1)
-    pen = objVals
-  }else{
-    ndays <- as.integer(ceiling(n/2))
-    pen = as.integer(objVals*10)
-  }
-  
+
+  ndays <- as.integer(ceiling(n/minPerDay)+1)
+  pen = objVals
+
   indStart <- as.integer(rep(n,ndays))
   ##run vehicle routing problem from python script
   ## GCS is global span cost coefficient
@@ -644,16 +669,16 @@ timeCCLHS <- function(X,n){
 }
 
 ##function to run simulations
-collectTime <- function(X,sampleFun, num, dropAllowed){
+collectTime <- function(X,sampleFun, num){
   pkgs <- c("Rcpp","LaplacesDemon", "foreach","sf",
           "raster","LearnGeom","dplyr","reticulate","gdistance","scales","clhs")
   test_res <- foreach(n = num, .combine = rbind, .packages = pkgs,
-                    .export = c("start_sf","tr1", "calcCost")) %dopar% { #
+                    .export = c("start_sf","trSmall", "calcCost_clhs")) %dopar% { #
                       reticulate::source_python("mTSP.py")
                       templhs <- sampleFun(X,n)
                       dat <- X[templhs$index_samples,]
                       if(nrow(dat) > 1){
-                        time <- calcCost(dat,templhs$final_obj_continuous,dropAllowed)
+                        time <- calcCost_clhs(dat,templhs$final_obj_continuous)
                         data.frame(Num = n, Cost = time)
                       }else{
                         NULL
@@ -664,15 +689,70 @@ collectTime <- function(X,sampleFun, num, dropAllowed){
 }
 
 trans <- as.integer((seq(5,50,length.out = 5))) ##numbers of transects
+trans <- rep(trans,each = 10) ##replications at each level
+
+LHSTime <- collectTime(X,timeLHS,num = trans)
+LHSTime$Type = "LHS"
+CCLHSTime <- collectTime(Xcost,timeCCLHS,num = trans)
+CCLHSTime$Type = "CCLHS"
+
+##function to choose route of least costly point set
+calcCost_tsp <- function(Xcost,n,nTry){
+  pkgs <- c("Rcpp","sf","data.table","raster","dplyr","reticulate","gdistance","scales","clhs")
+  tspTime <- foreach(i = 1:nTry,.combine = rbind, .packages = pkgs,
+                     .export = c("start_sf","trSmall")) %dopar% {
+    reticulate::source_python("mTSP.py")
+    xMat <- st_drop_geometry(Xcost)
+    temp <- clhs(xMat,size = n,cost = ncol(xMat),iter = 5000,use.cpp = T,simple = F)
+    pnts <- Xcost[temp$index_samples,]
+    pnts <- pnts[,1]
+    colnames(pnts) <- c("name","geometry")
+    st_geometry(pnts) <- "geometry"
+    startPnts <- st_as_sf(data.frame(name = "Start",geometry = start_sf))
+    pnts <- rbind(pnts, startPnts)
+    pnts2 <- as(pnts, "Spatial")
+    ## create distance matrix between sample points
+    test <- costDistance(trSmall,pnts2,pnts2)
+    dMat2 <- as.matrix(test)
+    dMat2 <- dMat2*60
+    dMat2[is.infinite(dMat2)] <- 1000
+    
+    ##penalty based on quality of points
+    objVals <- max(temp$final_obj_continuous) - temp$final_obj_continuous
+    maxTime <- 8L ##hours
+    ## time per transect
+    plotTime <- 50L ##mins
+    temp <- dMat2[1:n,1:n]
+    maxDist <- sum(temp[upper.tri(temp)])
+    minPen <- maxDist
+    maxPen <- maxDist * 4
+    objVals <- scales::rescale(objVals, to = c(minPen,maxPen))
+    objVals <- as.integer(objVals)
+    
+    ndays <- as.integer(ceiling(n/5)+1)
+    pen = objVals
+    
+    indStart <- as.integer(rep(n,ndays))
+    ##run vehicle routing problem from python script
+    ## GCS is global span cost coefficient
+    vrp <- py_mTSP(dat = dMat2,num_days = ndays, start = indStart, end = indStart, 
+                   max_cost = maxTime*60L, plot_time = plotTime, penalty =  pen, arbDepot = F, GSC = 5L)
+    time <- vrp[[2]]
+    totTime <- sum(as.numeric(unlist(time)))
+    num = length(as.numeric(unlist(vrp[[1]])))-2*length(vrp[[1]])
+    data.table(It = i, Cost = totTime, Num = num)
+  }
+  return(min(tspTime$Cost))
+}
+
+trans <- as.integer((seq(5,50,length.out = 5))) ##numbers of transects
 trans <- rep(trans,each = 5) ##replications at each level
 
-LHSTime <- collectTime(X,timeLHS,num = trans, dropAllowed = F)
-LHSTime$Type = "LHS"
-CCLHSTime <- collectTime(Xcost,timeCCLHS,num = trans, dropAllowed = F)
-CCLHSTime$Type = "CCLHS"
-TSPTime <- collectTime(Xcost, timeCCLHS, num = trans, dropAllowed = T)
-TSPTime$Type = "TSP"
-
+TSPTime <- foreach(n = trans,.combine = rbind) %do% {
+  time <- calcCost_tsp(Xcost,n,15)
+  data.frame(Num = n, Cost = time)
+}
+TSPTime$Type <- "TSP"
 timeAll <- rbind(LHSTime,CCLHSTime,TSPTime)
 timeAll$Cost <- timeAll$Cost/480 ##covert from minutes to 8-hour days
 
@@ -682,45 +762,88 @@ timeAll$Type <- as.factor(timeAll$Type)
 ggplot(timeAll, aes(x = Num, y = Cost, fill = Type))+
   geom_boxplot()
 
-Time_plot <- ggplot(timeAll, aes(x = Num, y = Cost, fill = Type)) +
-  geom_boxplot() +
-  labs(x = "Number of Transects", y = "Time Cost to Sample Sufficient Samples") +
-  scale_fill_discrete(
-    guide = guide_legend(reverse = FALSE),
-    name = 'Sample Method',
-    labels = c(
-      'cLHS- cLHS resampled',
-      'cost cLHS - cLHS resampled',
-      'cost cLHS systematic resampled'
-    )
-  ) +
-  theme_few()
-plot(Bfill_transectPlot2)
-ggsave("./Results/KS_transectPlot2.jpeg", device = 'jpeg')
-
+# Time_plot <- ggplot(timeAll, aes(x = Num, y = Cost, fill = Type)) +
+#   geom_boxplot() +
+#   labs(x = "Number of Transects", y = "Time Cost to Sample Sufficient Samples") +
+#   scale_fill_discrete(
+#     guide = guide_legend(reverse = FALSE),
+#     name = 'Sample Method',
+#     labels = c(
+#       'cLHS- cLHS resampled',
+#       'cost cLHS - cLHS resampled',
+#       'cost cLHS systematic resampled'
+#     )
+#   ) +
+#   theme_few()
+# plot(Bfill_transectPlot2)
+# ggsave("./Results/KS_transectPlot2.jpeg", device = 'jpeg')
 ```
 
-## Num Transects Needed
+## Time to fill variable space
 
-Another possibility for investigating sampling cost is running the code above, but instead of using increasing numbers of transects, fixing the number at the 90% variable space filling as determine by the previous simulations. The function below uses the simulation data from the above chunks (statsAll) and returns the estimated number of transects needed to reach 90% space filling. Note that the function will be inaccurate if you only simulated small numbers of transects.
+Instead of just calculating the time cost for different numbers of transects, we can use the TSP to estimate the cost of using each sampling method to fill the variable space. Thus, here we use the number of transects needed to fill the variable space as calculated above, and use the TSP to estimate the cost of each method.
 
 ```{r num}
-numDat <- data.table(statsAll)
+nSims <- 20
 
-calcNumTrans <- function(type, numDat){
-  tempDat <- numDat[SType == type,]
-  temp <- tempDat[,.(y = median(KS)), by = .(Num)]
-  temp[,`:=`(y = (y-min(y))/(max(y)-min(y)), Num = as.numeric(as.character(Num)))]
-  l1 <- loess(Num ~ y, data = temp)
-  
-  temp <- tempDat[,.(y = median(fillQual)), by = .(Num)]
-  temp[,`:=`(y = (y-min(y))/(max(y)-min(y)), Num = as.numeric(as.character(Num)))]
-  l2 <- loess(Num ~ y, data = temp)
-  numTrans <- predict(l1,data.frame(y = 0.15)) %>% 
-    round(digits = 0) %>% as.integer()
-  return(numTrans)
+collectTime2 <- function(X,sampleFun,num, nReps, plotTime = 50L, minNum = 3L){
+  pkgs <- c("Rcpp","LaplacesDemon", "foreach","sf",
+          "raster","LearnGeom","dplyr","reticulate","gdistance","scales","clhs")
+  test_res <- foreach(n = 1:nReps, .combine = rbind, .packages = pkgs,
+                    .export = c("start_sf","trSmall", "calcCost_clhs")) %dopar% { #
+                      reticulate::source_python("mTSP.py")
+                      templhs <- sampleFun(X,num)
+                      dat <- X[templhs$index_samples,]
+                      if(nrow(dat) > 1){
+                        time <- calcCost_clhs(dat,templhs$final_obj_continuous,plotTime,minNum)
+                        data.frame(Rep = n, Cost = time)
+                      }else{
+                        NULL
+                      }
+                      
+                    }
+  return(test_res)
 }
 
+##single points clhs sampled
+allSLDat <- as.data.table(getValues(ancDatSL_cost))##table of SL data
+allSLDat <- na.omit(allSLDat)
+pointCCLHS <- function(X,n){
+  temp <- clhs(X,size = n,cost = ncol(X),use.cpp = T, iter = 10000,simple = F)
+  small <- as.matrix(temp$sampled_data)
+  return(small)
+}
+
+numNeeded <- numPoints[SType == "CCLHS",as.integer(nPoints)]
+pointTime <- collectTime2(allSLDat,pointCCLHS,numNeeded,nSims,plotTime = 2L, minNum = 10)
+clhsTime$SType <- "CLHS_Resample"
+
+
+##clhs resampled clhs
+numNeeded <- numTrans[SType == "CCLHS",as.integer(nTrans)]
+clhsTime <- collectTime2(Xcost,timeCCLHS,numNeeded,nSims)
+clhsTime$SType <- "CLHS_Resample"
+
+##clhs regular resampling
+numNeeded <- numTrans[SType == "CCLHSReg",as.integer(nTrans)]
+clhsregTime <- collectTime2(Xcost,timeCCLHS,numNeeded,nSims)
+clhsregTime$SType <- "CLHS_Regular"
+
+##clhs optimised using TSP
+numNeeded <- numTrans[SType == "CCLHS",as.integer(nTrans)]
+tspTime <- foreach(n = 1:(nSims-5),.combine = rbind) %do% {
+  time <- calcCost_tsp(Xcost,numNeeded,15)
+  data.frame(Rep = n, Cost = time)
+}
+tspTime$SType <- "TSP_Optimised"
+
+timeAll <- rbind(clhsTime,clhsregTime,tspTime)
+timeAll <- as.data.table(timeAll)
+timeAll[,Cost := Cost/480]
+timeAll[,SType := as.factor(SType)]
+
+ggplot(timeAll, aes(x = SType, y = Cost))+
+  geom_boxplot()
 ```
 
 ## Compare SS transect data to covariate space with DataExplorer
@@ -732,66 +855,4 @@ LL <- LL %>% dplyr::select(mapunit1, mapunit2, '25m_MRVBF_', '25m_Landfo', '25m_
 DataExplorer::create_report(LL, y = "mapunit1")
 ```
 
-```{r}
-##function to make TSP
-createTSP <- function(X,n,numTry,ancDatVL){
-  xMat <- st_drop_geometry(X)
-  temp <- clhs(xMat,size = n,cost = ncol(xMat),iter = 5000,use.cpp = T, simple = F)
-  dat <- X[temp$index_samples,]
-
-  pnts <- dat
-  
-  p2 <- st_as_sf(pnts)
-  pnts <- pnts[,1]
-  colnames(pnts) <- c("name","geometry")
-  st_geometry(pnts) <- "geometry"
-  startPnts <- st_as_sf(data.frame(name = "Start",geometry = start_sf))
-  pnts <- rbind(pnts, startPnts)
-  pnts2 <- as(pnts, "Spatial")
-  
-  ## create distance matrix between sample points
-  test <- costDistance(tr1,pnts2,pnts2)
-  dMat2 <- as.matrix(test)
-  dMat2 <- dMat2*60
-  dMat2[is.infinite(dMat2)] <- 1000
-  
-  ##penalty based on quality of points
-  objVals <- temp$final_obj_continuous
-  objVals <- max(objVals) - objVals
-  
-  maxTime <- 8L ##hours
-  ## time per transect
-  plotTime <- 45L ##mins
-  temp <- dMat2[1:n,1:n]
-  maxDist <- sum(temp[upper.tri(temp)])
-  minPen <- maxDist * 1.5
-  maxPen <- maxDist * 5
-  objVals <- scales::rescale(objVals, to = c(minPen,maxPen))
-  objVals <- as.integer(objVals)
-  
-  ndays <- as.integer(ceiling(n/5)+1)
-  indStart <- as.integer(rep(n,ndays))
-  ##run vehicle routing problem from python script
-  ## GCS is global span cost coefficient
-  vrp <- py_mTSP(dat = dMat2,num_days = ndays, start = indStart, end = indStart, 
-                 max_cost = maxTime*60L, plot_time = plotTime, penalty =  objVals, arbDepot = F, GSC = 15L)
-  
-  result <- vrp[[1]]
-  idxs <- as.numeric(unlist(result))
-  idxs <- idxs[idxs != n]
-  idxs <- idxs+1
-  
-  dat <- pnts[idxs,]
-  small <- foreach(j = 1:nrow(dat),.combine = rbind) %do% {
-    tri <- Tri_build(id = j, x = st_coordinates(dat[j,])[1],y = st_coordinates(dat[j,])[2])
-    tempDat <- ancDat$extract(tri)
-    tempDat <- tempDat[[1]]
-    tempDat
-  }
-  small <- small[complete.cases(small),]
-  sl_lhs <- clhs(as.data.frame(small), size = 15*n, iter = 5000,use.cpp = T, simple = F)
-  temp <- sl_lhs$sampled_data
-  return(temp)
-}
-```
 
