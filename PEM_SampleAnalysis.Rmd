@@ -221,50 +221,63 @@ ancVals <- as.data.table(getValues(ancDatSL))##table of SL data
 ancVals <- na.omit(ancVals)
 idVals <- ancVals$CellID
 ancVals[,CellID := NULL]
-ancBin <- ancVals[,lapply(.SD, function(x){cut(x,breaks = seq(min(x), max(x), length.out = 50),labels = F,include.lowest = T)})] ##put into 10 bins by quantile
-ancBin <- unite(ancBin, LHSVar, sep = "")
-ancBin[,LHSVar := as.numeric(LHSVar)]
-ancSmall <- ancBin[,.(Num = .N), by = .(LHSVar)] ##count occurences
-ancSmall <- ancSmall[Num > 99,] ##remove uncommon
-setorder(ancSmall,-Num)
-ancSmall[,ID := seq_along(Num)]
-ancBin[ancSmall, ID := i.ID, on = "LHSVar"]
-ancBin <- na.omit(ancBin)
-fullHist <- hist(ancBin$ID)
-fullHistBr <- fullHist$breaks
-fullDens <- fullHist$counts/sum(fullHist$counts)
-plot(ancSmall$Num, type = "l")
-ancQuants <- ancVals[,lapply(.SD,function(x){seq(min(x), max(x), length.out = 50)})] ##save quantiles of full set
+#ancBin <- ancVals[,lapply(.SD, function(x){cut(x,breaks = seq(min(x),max(x),length.out = 50),labels = F,include.lowest = T)})] ##put into 10 bins by quantile
+ ##save quantiles of full set
 
 ##function to test KS statistic of LHS distribution
-ks_stat_clhs <- function(sample,ancSmall,fullBreaks){
+ks_stat_clhs <- function(sample){
   sampDat <- as.data.table(sample)
   sampDat <- na.omit(sampDat)
-  ##split into same bins as full data set
+  nsamp <- nrow(sampDat)
+  
+    ancBin <- ancVals[,lapply(.SD, function(x){cut(x,breaks = quantile(x, probs = seq(0,1,length.out = 9)),labels = F,include.lowest = T)})]
+    ancBin <- copy(unite(ancBin, LHSVar, sep = "_"))
+    ancSmall <- ancBin[,.(Num = .N), by = .(LHSVar)] ##count occurences
+    ancSmall <- ancSmall[Num > 99,] ##remove uncommon
+    setorder(ancSmall,-Num)
+    ancSmall[,ID := seq_along(Num)]
+    ancBin[ancSmall, ID := i.ID, on = "LHSVar"]
+    ancBin <- na.omit(ancBin)
+    fullHist <- hist(ancBin$ID, breaks = as.integer(nsamp/5))
+    fullHistBr <- fullHist$breaks
+    fullDens <- fullHist$counts/sum(fullHist$counts)
+    #plot(ancSmall$Num, type = "l")
+    fullBreaks <- ancVals[,lapply(.SD,function(x){quantile(x, probs = seq(0,1,length.out = 9))})]
+    ##split into same bins as full data set
   for(i in 1:ncol(sampDat)){
     sampDat[[i]] <- cut(sampDat[[i]],breaks = fullBreaks[[i]], labels = F, include.lowest = T)
   }
-  sampBin <- copy(unite(sampDat,sampLHS,sep = ""))
-  sampBin[,sampLHS := as.numeric(sampLHS)]
+  sampBin <- copy(unite(sampDat,sampLHS,sep = "_"))
   sampBin[ancSmall, ID := i.ID, on = c(sampLHS = "LHSVar")]
   sampBin <- na.omit(sampBin)
-  smallHist <- hist(sampBin$ID, breaks = fullHistBr)
+  smallHist <- hist(sampBin$ID, breaks = fullHistBr, plot = F)
   smallDens <- smallHist$counts/sum(smallHist$counts)
-  sum(abs(fullDens - smallDens))
-  #sampBin <- sampBin[,.(SampNum = .N), by = .(sampLHS)]##count
-  ##merge to compare
+  tempDat <- data.table(ID = 1:length(smallDens), Sample = smallDens, Full = fullDens)
+  tempDat <- melt(tempDat, id.vars = "ID")
+  tempDat[,variable := as.factor(variable)]
+  # print(ggplot(tempDat, aes(x = ID, y = value, colour = variable))+
+  #   geom_bar(stat = "identity", position = "dodge"))
+  # tempMat <- rbind(fullDens,smallDens)
+  # return(KL(tempMat))
+  diff <- abs(cumsum(fullDens) - cumsum(smallDens))
+  return(max(diff))
+  # sampBin <- sampBin[,.(SampNum = .N), by = .(sampLHS)]##count
+  # #merge to compare
   # fullDat <- copy(ancSmall)
   # fullDat[sampBin, SampNum := i.SampNum, on = c(LHSVar = "sampLHS")]
   # fullDat[is.na(SampNum), SampNum := 0]
   # fullDat[,SampNum := SampNum/sum(SampNum)]
   # fullDat[,Num := Num/sum(Num)]
-  # fullDat[,MAvg := frollmean(SampNum, n = 15, align = "left")]
-  # fullDat <- na.omit(fullDat)
-  # fullDat[,MAvg := MAvg/sum(MAvg)]
-  # tempMat <- rbind(fullDat$Num,fullDat$MAvg)
+  # # fullDat[,MAvg := frollmean(SampNum, n = 15, align = "left")]
+  # # fullDat <- na.omit(fullDat)
+  # # fullDat[,MAvg := MAvg/sum(MAvg)]
+  # tempMat <- rbind(fullDat$Num,fullDat$SampNum)
+  # fullDat <- melt(fullDat, id.vars = c("LHSVar","ID"))
+  # print(ggplot(fullDat, aes(x = ID, y = value, col = variable))+
+  #   geom_line()+
+  #   ggtitle(type))
   # kl2 <- KL(tempMat)
-  # fullDat[,Diff := abs(Num - SampNum)]
-  # return(sum(fullDat$Diff))
+  # return(sum(kl2))
 }
 
 {
@@ -354,17 +367,17 @@ createCCLHS <- function(X,n){
 collectStats <- function(X,sampleFun,nums,testFun1 = ks_stat_clhs,testFun2 = fillTest){
   test_res <- foreach(n = nums, .combine = rbind, 
                     .packages = c("Rcpp","philentropy","foreach","clhs","data.table","dplyr","tidyr"),
-                    .export = c("ancQuants","ancSmall","idVals","ancVals")) %dopar% {
+                    .export = c("ancVals")) %dopar% {
                       smallSet <- sampleFun(as.data.frame(X),n)
-                      res1 <- testFun1(sample = smallSet,fullDat = ancSmall,fullBreaks = ancQuants)
+                      res1 <- testFun1(sample = smallSet)
                       res2 <- testFun2(X[,1:5], smallSet)
                       data.frame(Num = n,KS = res1, fill = res2)
                     }
   return(test_res)
 }
 
-nums <- round(seq(10, 800, length.out = 8))
-nums <- rep(nums, each = 5)
+nums <- round(seq(10, 500, length.out = 8))
+nums <- rep(nums, each = 8)
 statsRand <- collectStats(allSLDat[,-ncol(allSLDat)],createRandom,nums)
 statsRand$SType <- "Random"
 statsLHS <- collectStats(allSLDat[,-ncol(allSLDat)],createLHS, nums)
@@ -372,16 +385,16 @@ statsLHS$SType <- "LHS"
 statsCCLHS <- collectStats(allSLDat,createCCLHS, nums)
 statsCCLHS$SType <- "CCLHS"
 
-n = 123
+n = 200
 out <- foreach(i = 1:5, .combine = rbind) %do% {
   sample <- createRandom(ancVals,n)
-  randOut <- ks_stat_clhs(sample,ancSmall, ancQuants)
+  randOut <- ks_stat_clhs(sample,type = "random")
   sample <- createLHS(ancVals,n)
-  lhsOut <- ks_stat_clhs(sample,ancSmall, ancQuants)
+  lhsOut <- ks_stat_clhs(sample, type = "LHS")
   data.table(it = i, Random = randOut, LHS = lhsOut)
 }
 
-statsAll <- rbind(statsRand,statsCCLHS)
+statsAll <- rbind(statsRand,statsLHS)
 statsAll$Num <- as.factor(statsAll$Num)
 statsAll$SType <- as.factor(statsAll$SType)
 
