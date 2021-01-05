@@ -39,7 +39,7 @@ fillTest <- function(full, small){
     full, 
     2, 
     function(x) {
-      quantile(x, probs = seq(0, 1, 0.01), na.rm = TRUE)
+      quantile(x, probs = seq(0, 1, 0.005), na.rm = TRUE)
     }
   )
   fillQual <- foreach(var = 1:ncol(full),.combine = cbind) %do% {
@@ -224,6 +224,24 @@ ancVals[,CellID := NULL]
 #ancBin <- ancVals[,lapply(.SD, function(x){cut(x,breaks = seq(min(x),max(x),length.out = 50),labels = F,include.lowest = T)})] ##put into 10 bins by quantile
  ##save quantiles of full set
 
+# origPC <- prcomp(ancVals,scale. = T, center = T)
+# temp <- origPC$x
+# hFull <- hist(temp[,1], breaks = 40)
+# fullHistBr <- hFull$breaks
+# 
+# kl_stat_pc <- function(sample){
+#   sampPC <- prcomp(sample, scale. = T, center = T)
+#   t2 <- sampPC$x
+#   t2Vec <- t2[,1]
+#   t2Vec <- t2Vec[t2Vec > min(fullHistBr)]
+#   hSmall <- hist(t2Vec, breaks = fullHistBr)
+#   tempMat <- rbind(hFull$counts,hSmall$counts)
+#   KL(tempMat, est.prob = "empirical")
+# }
+# 
+# plot(density(temp[,1]))
+# lines(density(t2[,1]))
+
 ##function to test KS statistic of LHS distribution
 ks_stat_clhs <- function(sample){
   sampDat <- as.data.table(sample)
@@ -315,23 +333,30 @@ ks_stat_clhs <- function(sample){
 }
 
 ##similar to above but slightly different implimentation
-ks_stat_clhs_v2 <- function(sample,fullDat,fullBreaks){
+ks_stat_clhs_v2 <- function(sample){
   sampDat <- as.data.table(sample)
+  sampDat <- na.omit(sampDat)
+  nsamp <- nrow(sampDat)
+  
+  ancBin <- ancVals[,lapply(.SD, function(x){cut(x,breaks = seq(min(x),max(x),length.out = 50),labels = F,include.lowest = T)})]
+  ancBin <- copy(unite(ancBin, LHSVar, sep = "_"))
+  ancSmall <- ancBin[,.(Num = .N), by = .(LHSVar)] ##count occurences
+  ancSmall <- ancSmall[Num > 99,] ##remove uncommon
+  setorder(ancSmall,-Num)
+  ancSmall[,ID := seq_along(Num)]
+  fullBreaks <- ancVals[,lapply(.SD,function(x){seq(min(x),max(x),length.out = 50)})]
   ##split into same bins as full data set
   for(i in 1:ncol(sampDat)){
     sampDat[[i]] <- cut(sampDat[[i]],breaks = fullBreaks[[i]], labels = F, include.lowest = T)
   }
-  sampBin <- unite(sampDat,sampLHS,sep = "")
-  sampBin[,sampLHS := as.numeric(sampLHS)]
+  sampBin <- unite(sampDat,sampLHS,sep = "_")
   sampBin <- sampBin[,.(SampNum = .N), by = .(sampLHS)]##count
   ##merge to compare
+  
+  fullDat <- copy(ancSmall)
   fullDat[sampBin, SampNum := i.SampNum, on = c(LHSVar = "sampLHS")]
-  fullDat[is.na(SampNum), SampNum := 0]
-  fullDat[,SampNum := SampNum/sum(SampNum)]
-  fullDat[,Num := Num/sum(Num)]
-  fullDat[,LHSID := seq_along(Num)]
-  fullDat[,Diff := Num - SampNum]
-  return(sum(abs(fullDat$Diff)))
+  dat <- fullDat$SampNum
+  length(dat[is.na(dat)])/length(dat)
 }
 
 ```
@@ -352,7 +377,7 @@ createRandom <- function(X,n){
 }
 
 createLHS <- function(X,n){
-  temp <- clhs(X,size = n, cost = NULL, use.cpp = T, iter = 10000, simple = F)
+  temp <- clhs(X,size = n, cost = NULL, use.cpp = T, iter = 5000, simple = F)
   small <- as.matrix(temp$sampled_data)
   return(small)
 }
@@ -376,11 +401,11 @@ collectStats <- function(X,sampleFun,nums,testFun1 = ks_stat_clhs,testFun2 = fil
   return(test_res)
 }
 
-nums <- round(seq(10, 500, length.out = 8))
+nums <- round(seq(10, 700, length.out = 8))
 nums <- rep(nums, each = 8)
-statsRand <- collectStats(allSLDat[,-ncol(allSLDat)],createRandom,nums)
+statsRand <- collectStats(ancVals,createRandom,nums)
 statsRand$SType <- "Random"
-statsLHS <- collectStats(allSLDat[,-ncol(allSLDat)],createLHS, nums)
+statsLHS <- collectStats(ancVals,createLHS, nums)
 statsLHS$SType <- "LHS"
 statsCCLHS <- collectStats(allSLDat,createCCLHS, nums)
 statsCCLHS$SType <- "CCLHS"
@@ -388,13 +413,13 @@ statsCCLHS$SType <- "CCLHS"
 n = 200
 out <- foreach(i = 1:5, .combine = rbind) %do% {
   sample <- createRandom(ancVals,n)
-  randOut <- ks_stat_clhs(sample,type = "random")
+  randOut <- ks_stat_clhs_v2(sample)
   sample <- createLHS(ancVals,n)
-  lhsOut <- ks_stat_clhs(sample, type = "LHS")
+  lhsOut <- ks_stat_clhs_v2(sample)
   data.table(it = i, Random = randOut, LHS = lhsOut)
 }
 
-statsAll <- rbind(statsRand,statsLHS)
+statsAll <- rbind(statsRand,statsLHS,statsCCLHS)
 statsAll$Num <- as.factor(statsAll$Num)
 statsAll$SType <- as.factor(statsAll$SType)
 
@@ -425,7 +450,7 @@ ggplot(statsAll, aes(x = Num, y = fill, fill = SType))+
 
 ```{r num single points}
 statsAll <- as.data.table(statsAll)
-temp <- statsAll[,.(y = median(KS)), by = .(SType,Num)]
+temp <- statsAll[,.(y = median(fill)), by = .(SType,Num)]
 temp[,`:=`(y = (y-min(y))/(max(y)-min(y)), Num = as.numeric(as.character(Num)))]
 numPoints <- temp[,.(nPoints = predict(loess(Num ~ y,data = .SD), data.frame(y = 0.1))), by = .(SType)]
 
