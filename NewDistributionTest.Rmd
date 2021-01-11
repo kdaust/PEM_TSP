@@ -176,7 +176,7 @@ small <- foreach(j = 1:nrow(dat),.combine = rbind) %do% {
 
 }
 small <- st_as_sf(small)
-temp <- ancDat$extract_points(small)
+temp <- ancDatVL$extract_points(small)
 temp <- temp[complete.cases(temp),]
 temp <- temp[,-ncol(temp)]
 ##all transects
@@ -197,7 +197,7 @@ xMat <- st_drop_geometry(Xcost)
   dat <- X[temp$index_samples,]
   small <- foreach(j = 1:nrow(dat),.combine = c) %do% {
     tri <- Tri_build(id = j, x = st_coordinates(dat[j,])[1],y = st_coordinates(dat[j,])[2])
-    tempDat <- ancDat$extract(tri,df = T)
+    tempDat <- ancDatVL$extract(tri,df = T)
     tempDat[,length(tempDat)]
   }
   idxs <- which(idVals %in% small)
