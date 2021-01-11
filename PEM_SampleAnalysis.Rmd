@@ -22,6 +22,8 @@ library(tidyverse)
 library(goftest)
 library(velox)
 require(ggthemes)
+require(philentropy)
+#install.packages("philentropy")
 
 ```
 
@@ -201,6 +203,13 @@ acost2 <- projectRaster(acost, ancDatSL)
 acost2 <- mask(acost2, alt)
 #acost2 <- mask(acost2, becLayer)
 ancDatSL_cost <- stack(ancDatSL,acost2)
+
+plot(acost2)
+
+png('./outputs/acost2.png', height=nrow(acost2), width=ncol(acost2)) 
+plot(acost2, maxpixels=ncell(acost2))
+dev.off()
+
 ```
 ### Simulation 1: Single point sampling
 
