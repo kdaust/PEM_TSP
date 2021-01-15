@@ -113,7 +113,7 @@ ancDatSL <- raster::stack(covars)
 proj4string(ancDatSL) <- "+init=epsg:3005"
 layerNamesSl <- names(ancDatSL) ##need to change this if you change the layers
 for(i in layerNamesSl){
-  ancDatSL[[i]][ancDatSL[[i]] > quantile(ancVals[[i]],0.9, na.rm = T)] <- NA
+  ancDatSL[[i]][ancDatSL[[i]] > quantile(ancDatSL[[i]],0.9, na.rm = T)] <- NA
 }
 
 ancVals <- as.data.table(getValues(ancDatSL))##table of SL data
@@ -477,10 +477,10 @@ collectStats <- function(X,sampleFun,nums,testFun1 = ks_stat_clhs_v3,testFun2 = 
   test_res <- foreach(n = nums, .combine = rbind, 
                     .packages = c("Rcpp","philentropy","foreach","clhs","data.table","dplyr","tidyr"),
                     .export = c("ancVals")) %dopar% {
-                      smallSet <- sampleFun(as.data.frame(X),n)
+                      smallSet <- sampleFun(X,n)
                       res1 <- testFun1(sample = smallSet)
                       res2 <- testFun2(X[,1:5], smallSet)
-                      data.frame(Num = n,KS = res1, fill = res2)
+                      data.frame(Num = n,KL = res1, fill = res2)
                     }
   return(test_res)
 }
@@ -507,7 +507,7 @@ statsAll <- rbind(statsRand,statsLHS,statsCCLHS)
 statsAll$Num <- as.factor(statsAll$Num)
 statsAll$SType <- as.factor(statsAll$SType)
 
-ggplot(statsAll, aes(x = Num, y = KS, fill = SType))+
+ggplot(statsAll, aes(x = Num, y = KL, fill = SType))+
   geom_boxplot()
 ggplot(statsAll, aes(x = Num, y = fill, fill = SType))+
   geom_boxplot()
@@ -534,7 +534,7 @@ ggplot(statsAll, aes(x = Num, y = fill, fill = SType))+
 
 ```{r num single points}
 statsAll <- as.data.table(statsAll)
-temp <- statsAll[,.(y = median(fill)), by = .(SType,Num)]
+temp <- statsAll[,.(y = median(KL)), by = .(SType,Num)]
 temp[,`:=`(y = (y-min(y))/(max(y)-min(y)), Num = as.numeric(as.character(Num)))]
 numPoints <- temp[,.(nPoints = predict(loess(Num ~ y,data = .SD), data.frame(y = 0.1))), by = .(SType)]
 
@@ -638,7 +638,7 @@ collectStats <- function(X,sampleFun, nums, testFun1 = ks_stat_clhs_v3,testFun2 
 ```
 
 ```{r run simulations}
-nums <- round(seq(5, 70, length.out = 6)) ##set sequence of transect number
+nums <- round(seq(5, 100, length.out = 6)) ##set sequence of transect number
 nums <- rep(nums, each = 3) ##replicates of each number (should be at least 5)
 
 statsLHS_trans <- collectStats(X,createLHS,nums)
@@ -687,9 +687,9 @@ ggplot(statsAll, aes(x = Num, y = Mean, fill = SType))+
 
 ```{r num points}
 statsAll <- as.data.table(statsAll)
-temp <- statsAll[,.(y = median(KS)), by = .(SType,Num)]
+temp <- statsAll[,.(y = median(KL)), by = .(SType,Num)]
 temp[,`:=`(y = (y-min(y))/(max(y)-min(y)), Num = as.numeric(as.character(Num)))]
-numTrans <- temp[,.(nTrans = predict(loess(Num ~ y,data = .SD), data.frame(y = 0.1))), by = .(SType)]
+numTrans <- temp[,.(nTrans = predict(loess(Num ~ y,data = .SD), data.frame(y = 0.2))), by = .(SType)]
 
 knitr::kable(numTrans, digits = 2, caption = "Number of transects need for 90% of maximum space filling")
 
@@ -706,6 +706,8 @@ knitr::kable(numTrans, digits = 2, caption = "Number of transects need for 90% o
 ```
 
 ## Number of TSP iterations needed
+
+Not much benefit after 15-20 iterations
 
 ```{r}
 calcCost <- function(Xcost,n,nTry){
@@ -756,7 +758,7 @@ calcCost <- function(Xcost,n,nTry){
   return(tspTime)
 }
 
-nums <- seq(5,40,by = 5)
+nums <- seq(2,40,by = 5)
 tspTest <- foreach(numRep = nums, .combine = rbind) %do% {
   dat <- calcCost(Xcost, n = 30, nTry = numRep)
   dat[,NumRep := numRep]
@@ -764,11 +766,12 @@ tspTest <- foreach(numRep = nums, .combine = rbind) %do% {
 }
 
 tspSum <- tspTest[,.(MinTime = min(Cost)), by = .(NumRep)]
+knitr::kable(tspSum)
 ```
 
 ## Simulation 3: Sampling Time
 
-The previous chunks investigated how variable space filling changed with different sampling strategies. We now apply the same process, but collect results on the amount of time each plan would take (as determined by the TSP). We use similar sampling plans as in the above chunks: cost-constrained clhs, regular clhs, and TSP (same as cost-constrained clhs, but allowing dropped sites). As above, the simulation runs each scenario with increasing numbers of transects and multiple replications at each level.
+The previous chunks investigated how variable space filling changed with different sampling strategies. We now apply the same process, but collect results on the amount of time each plan would take (as determined by the TSP). We use similar sampling plans as in the above chunks: cost-constrained clhs, regular clhs, and TSP (cost-constrained clhs optimised using the TSP). First, we run the simulations as above, with  increasing numbers of transects and multiple replications at each level. We then simulate the cost to fill the variable space to 90% as calculated above, using each of these methods, and present a sample TSP route.
 
 ```{r time cost}
 ##create TSP to calculate time
@@ -938,6 +941,90 @@ ggplot(timeAll, aes(x = Num, y = Cost, fill = Type))+
 # ggsave("./Results/KS_transectPlot2.jpeg", device = 'jpeg')
 ```
 
+## Example TSP Route
+
+```{r tsp_example}
+n = 25
+
+xMat <- st_drop_geometry(Xcost)
+temp <- clhs(xMat,size = n,cost = ncol(xMat),iter = 10000,use.cpp = T,simple = F)
+pnts <- Xcost[temp$index_samples,]
+pnts <- pnts[,1]
+colnames(pnts) <- c("name","geometry")
+st_geometry(pnts) <- "geometry"
+startPnts <- st_as_sf(data.frame(name = "Start",geometry = start_sf))
+pnts <- rbind(pnts, startPnts)
+pnts2 <- as(pnts, "Spatial")
+## create distance matrix between sample points
+test <- costDistance(trSmall,pnts2,pnts2)
+dMat2 <- as.matrix(test)
+dMat2 <- dMat2*60
+dMat2[is.infinite(dMat2)] <- 1000
+
+##penalty based on quality of points
+objVals <- max(temp$final_obj_continuous) - temp$final_obj_continuous
+maxTime <- 8L ##hours
+## time per transect
+plotTime <- 50L ##mins
+temp <- dMat2[1:n,1:n]
+maxDist <- sum(temp[upper.tri(temp)])
+minPen <- maxDist
+maxPen <- maxDist * 4
+objVals <- scales::rescale(objVals, to = c(minPen,maxPen))
+objVals <- as.integer(objVals)
+
+ndays <- as.integer(ceiling(n/5)+1)
+pen = objVals
+
+indStart <- as.integer(rep(n,ndays))
+##run vehicle routing problem from python script
+## GCS is global span cost coefficient
+vrp <- py_mTSP(dat = dMat2,num_days = ndays, start = indStart, end = indStart, 
+               max_cost = maxTime*60L, plot_time = plotTime, penalty =  pen, arbDepot = F, GSC = 100L)
+
+result <- vrp[[1]]
+
+## create spatial paths
+paths <- foreach(j = 0:(length(result)-1), .combine = rbind) %do% {
+  if(length(result[[as.character(j)]]) > 2){
+    cat("Drop site",j,"...\n")
+    p1 <- result[[as.character(j)]]+1
+    out <- foreach(i = 1:(length(p1)-1), .combine = rbind) %do% {
+      temp1 <- pnts[p1[i],]
+      temp2 <- pnts[p1[i+1],]
+      temp3 <- shortestPath(trSmall,st_coordinates(temp1),
+                            st_coordinates(temp2),output = "SpatialLines") %>% st_as_sf()
+      temp3$Segment = i
+      temp3
+    }
+    out$DropSite = j
+    out
+  }
+  
+}
+
+paths <- st_transform(paths, 3005)
+#st_write(paths, dsn = "RoadTSP.gpkg", layer = "Paths", append = T, driver = "GPKG")  
+
+plot(acost2)
+plot(pnts,col = "black", add = T)
+plot(paths,col = as.factor(paths$DropSite), add = T)
+
+## label points
+p2 <- pnts
+p2$PID <- seq_along(p2$name)
+p2 <- p2[,"PID"]
+p2$DropLoc <- NA
+p2$Order <- NA
+for(i in 0:(length(result)-1)){
+  p1 <- result[[as.character(i)]]+1
+  p1 <- p1[-1]
+  p2$DropLoc[p1] <- i
+  p2$Order[p1] <- 1:length(p1)
+}
+p2 <- st_transform(p2, 3005)
+```
+
 ## Time to fill variable space
 
 Instead of just calculating the time cost for different numbers of transects, we can use the TSP to estimate the cost of using each sampling method to fill the variable space. Thus, here we use the number of transects needed to fill the variable space as calculated above, and use the TSP to estimate the cost of each method.
@@ -970,14 +1057,15 @@ allSLDat <- as.data.frame(getValues(ancDatSL_cost))##table of SL data
 allSLDat <- na.omit(allSLDat)
 allSLDat <- allSLDat[!is.infinite(allSLDat$layer),]
 numNeeded <- numPoints[SType == "CCLHS",as.integer(nPoints)]
-numNeeded = 410
 
 pkgs <- c("Rcpp","LaplacesDemon", "foreach","sf",
         "raster","LearnGeom","dplyr","reticulate","gdistance","scales","clhs")
-SPoint <- foreach(n = 1:nSims, .combine = rbind, .packages = pkgs,
+
+## note this part takes about 10 mins
+SPoint <- foreach(n = 1:(nSims*5), .combine = rbind, .packages = pkgs,
                   .export = c("start_sf","trSmall", "calcCost_clhs","allSLDat")) %dopar% { #
                     reticulate::source_python("mTSP.py")
-                    templhs <- clhs(allSLDat,size = as.integer(numNeeded/4),cost = ncol(allSLDat),use.cpp = T, iter = 10000,simple = F)
+                    templhs <- clhs(allSLDat,size = as.integer(numNeeded/4),cost = ncol(allSLDat),use.cpp = T, iter = 6000,simple = F)
                     tempdat <- templhs$sampled_data
                     cellNums <- as.numeric(rownames(tempdat))
                     dat <- raster::xyFromCell(ancDatSL_cost,cell = cellNums, sp = T)
@@ -992,7 +1080,13 @@ SPoint <- foreach(n = 1:nSims, .combine = rbind, .packages = pkgs,
                     
                   }
 
-SPoint$SType <- "Single Point CLHS"
+SPoint <- as.data.table(SPoint)
+SPoint[,TSPNum := rep(c(1:5),each = nSims)]
+TSPpoint <- SPoint[,.(Cost = min(Cost)), by = .(TSPNum)]
+TSPpoint[,SType := "Single Point TSP"]
+setnames(TSPpoint, old = "TSPNum", new = "Rep")
+SPoint[,TSPNum := NULL]
+SPoint[,SType := "Single Point CLHS"]
 
 ##clhs resampled clhs
 numNeeded <- numTrans[SType == "CCLHS",as.integer(nTrans)]
@@ -1013,10 +1107,11 @@ tspTime <- foreach(n = 1:(nSims),.combine = rbind) %do% {
 }
 tspTime$SType <- "TSP_Optimised"
 
-timeAll <- rbind(SPoint,clhsTime,clhsregTime,tspTime)
+timeAll <- rbind(SPoint,TSPpoint,clhsTime,clhsregTime,tspTime)
 timeAll <- as.data.table(timeAll)
 timeAll[,Cost := Cost/480]
 timeAll[,SType := as.factor(SType)]
+timeAll[,SType := reorder(SType,Cost, FUN = function(x){-mean(x)})]
 
 ggplot(timeAll, aes(x = SType, y = Cost))+
   geom_boxplot()
@@ -1024,11 +1119,11 @@ ggplot(timeAll, aes(x = SType, y = Cost))+
 
 ## Compare SS transect data to covariate space with DataExplorer
 ```{r}
-SL <- fread("./InputData/Deception_Transect_SSxcovar_5m.csv")
-LL <- fread("./InputData/Deception_Transect_SSxcovar_LL.csv")
-LL <- LL %>% dplyr::select(mapunit1, mapunit2, '25m_MRVBF_', '25m_Landfo', '25m_DAH_3C')
-
-DataExplorer::create_report(LL, y = "mapunit1")
+# SL <- fread("./InputData/Deception_Transect_SSxcovar_5m.csv")
+# LL <- fread("./InputData/Deception_Transect_SSxcovar_LL.csv")
+# LL <- LL %>% dplyr::select(mapunit1, mapunit2, '25m_MRVBF_', '25m_Landfo', '25m_DAH_3C')
+# 
+# DataExplorer::create_report(LL, y = "mapunit1")
 ```
 
 
