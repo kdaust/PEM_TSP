@@ -37,15 +37,10 @@ cl <- makePSOCKcluster(detectCores()-2)
 registerDoParallel(cl)
 
 fillTest <- function(full, small){
-  strata <- apply(
-    full, 
-    2, 
-    function(x) {
-      quantile(x, probs = seq(0, 1, 0.005), na.rm = TRUE)
-    }
-  )
+  strata <- full[,lapply(.SD,function(x) {quantile(x, probs = seq(0, 1, 0.005), na.rm = TRUE)})]
+  
   fillQual <- foreach(var = 1:ncol(full),.combine = cbind) %do% {
-    .Call(graphics:::C_BinCount, small[,var], strata[,var], TRUE,TRUE)
+    .Call(graphics:::C_BinCount, small[[var]], strata[[var]], TRUE,TRUE)
   }
   
   return(length(fillQual[fillQual == 0])) 
@@ -247,83 +242,8 @@ ancVals <- as.data.table(getValues(ancDatSL))##table of SL data
 ancVals <- na.omit(ancVals)
 idVals <- ancVals$CellID
 ancVals[,CellID := NULL]
-#ancBin <- ancVals[,lapply(.SD, function(x){cut(x,breaks = seq(min(x),max(x),length.out = 50),labels = F,include.lowest = T)})] ##put into 10 bins by quantile
- ##save quantiles of full set
 
-# origPC <- prcomp(ancVals,scale. = T, center = T)
-# temp <- origPC$x
-# hFull <- hist(temp[,1], breaks = 40)
-# fullHistBr <- hFull$breaks
-# 
-# kl_stat_pc <- function(sample){
-#   sampPC <- prcomp(sample, scale. = T, center = T)
-#   t2 <- sampPC$x
-#   t2Vec <- t2[,1]
-#   t2Vec <- t2Vec[t2Vec > min(fullHistBr)]
-#   hSmall <- hist(t2Vec, breaks = fullHistBr)
-#   tempMat <- rbind(hFull$counts,hSmall$counts)
-#   KL(tempMat, est.prob = "empirical")
-# }
-# 
-# plot(density(temp[,1]))
-# lines(density(t2[,1]))
-
-##function to test KS statistic of LHS distribution
-# ks_stat_clhs <- function(sample){
-#   sampDat <- as.data.table(sample)
-#   sampDat <- na.omit(sampDat)
-#   nsamp <- nrow(sampDat)
-#   
-#     ancBin <- ancVals[,lapply(.SD, function(x){cut(x,breaks = seq(min(x),max(x),length.out = 9),labels = F,include.lowest = T)})]
-#     ancBin <- copy(unite(ancBin, LHSVar, sep = "_"))
-#     ancSmall <- ancBin[,.(Num = .N), by = .(LHSVar)] ##count occurences
-#     ancSmall <- ancSmall[Num > 99,] ##remove uncommon
-#     setorder(ancSmall,-Num)
-#     ancSmall[,ID := seq_along(Num)]
-#     ancBin[ancSmall, ID := i.ID, on = "LHSVar"]
-#     ancBin <- na.omit(ancBin)
-#     fullHist <- hist(ancBin$ID, breaks = as.integer(50))
-#     fullHistBr <- fullHist$breaks
-#     fullDens <- fullHist$counts/sum(fullHist$counts)
-#     #plot(ancSmall$Num, type = "l")
-#     fullBreaks <- ancVals[,lapply(.SD,function(x){seq(min(x),max(x),length.out = 9)})]
-#     ##split into same bins as full data set
-#   for(i in 1:ncol(sampDat)){
-#     sampDat[[i]] <- cut(sampDat[[i]],breaks = fullBreaks[[i]], labels = F, include.lowest = T)
-#   }
-#   sampBin <- copy(unite(sampDat,sampLHS,sep = "_"))
-#   sampBin[ancSmall, ID := i.ID, on = c(sampLHS = "LHSVar")]
-#   sampBin <- na.omit(sampBin)
-#   smallHist <- hist(sampBin$ID, breaks = fullHistBr, plot = F)
-#   smallDens <- smallHist$counts/sum(smallHist$counts)
-#   tempDat <- data.table(ID = 1:length(smallDens), Sample = smallDens, Full = fullDens)
-#   tempDat <- melt(tempDat, id.vars = "ID")
-#   tempDat[,variable := as.factor(variable)]
-#   # print(ggplot(tempDat, aes(x = ID, y = value, colour = variable))+
-#   #   geom_bar(stat = "identity", position = "dodge"))
-#   # tempMat <- rbind(fullDens,smallDens)
-#   # return(KL(tempMat))
-#   diff <- abs(cumsum(fullDens) - cumsum(smallDens))
-#   return(max(diff))
-#   # sampBin <- sampBin[,.(SampNum = .N), by = .(sampLHS)]##count
-#   # #merge to compare
-#   # fullDat <- copy(ancSmall)
-#   # fullDat[sampBin, SampNum := i.SampNum, on = c(LHSVar = "sampLHS")]
-#   # fullDat[is.na(SampNum), SampNum := 0]
-#   # fullDat[,SampNum := SampNum/sum(SampNum)]
-#   # fullDat[,Num := Num/sum(Num)]
-#   # # fullDat[,MAvg := frollmean(SampNum, n = 15, align = "left")]
-#   # # fullDat <- na.omit(fullDat)
-#   # # fullDat[,MAvg := MAvg/sum(MAvg)]
-#   # tempMat <- rbind(fullDat$Num,fullDat$SampNum)
-#   # fullDat <- melt(fullDat, id.vars = c("LHSVar","ID"))
-#   # print(ggplot(fullDat, aes(x = ID, y = value, col = variable))+
-#   #   geom_line()+
-#   #   ggtitle(type))
-#   # kl2 <- KL(tempMat)
-#   # return(sum(kl2))
-# }
-
+##KL statistic (this one works best)
 ks_stat_clhs_v3 <- function(sample){
   sampDat <- as.data.table(sample)
   sampDat <- na.omit(sampDat)
@@ -346,11 +266,6 @@ ks_stat_clhs_v3 <- function(sample){
   sampBin <- copy(unite(sampDat,sampLHS,sep = "_"))
   sampBin[ancSmall, ID := i.ID, on = c(sampLHS = "LHSVar")]
   sampBin <- na.omit(sampBin)
-  
-  # print(ggplot(tempDat, aes(x = ID, y = value, colour = variable))+
-  #   geom_bar(stat = "identity", position = "dodge"))
-  # tempMat <- rbind(fullDens,smallDens)
-  # return(KL(tempMat))
   sampBin <- sampBin[,.(SampNum = .N), by = .(sampLHS)]##count
   #merge to compare
   fullDat <- copy(ancSmall)
@@ -364,11 +279,9 @@ ks_stat_clhs_v3 <- function(sample){
   #   geom_line())
   kl2 <- KL(tempMat)
   return(kl2)
-  # d1 <- cumsum(fullDat$Num)
-  # d2 <- cumsum(fullDat$SampNum)
-  # return(max(abs(d1 - d2)))
 }
 
+##using KS statistic
 ks_stat_clhs_v4 <- function(sample){
   sampDat <- as.data.table(sample)
   sampDat <- na.omit(sampDat)
@@ -441,8 +354,6 @@ ks_stat_clhs_v4 <- function(sample){
 # 
 # }
 
-##similar to above but slightly different implimentation
-
 ```
 
 
@@ -473,14 +384,14 @@ createCCLHS <- function(X,n){
 }
 
 ##collecting stats with different space filling tests
-collectStats <- function(X,sampleFun,nums,testFun1 = ks_stat_clhs_v3,testFun2 = fillTest){
+collectStats <- function(X,sampleFun,nums,testFun1 = ks_stat_clhs_v3, testFun2 = fillTest){
   test_res <- foreach(n = nums, .combine = rbind, 
                     .packages = c("Rcpp","philentropy","foreach","clhs","data.table","dplyr","tidyr"),
                     .export = c("ancVals")) %dopar% {
                       smallSet <- sampleFun(X,n)
                       res1 <- testFun1(sample = smallSet)
-                      res2 <- testFun2(X[,1:5], smallSet)
-                      data.frame(Num = n,KL = res1, fill = res2)
+                      res2 <- testFun2(full = ancVals, small = smallSet)
+                      data.frame(Num = n,KL = res1,Fill = res2)
                     }
   return(test_res)
 }
@@ -509,7 +420,7 @@ statsAll$SType <- as.factor(statsAll$SType)
 
 ggplot(statsAll, aes(x = Num, y = KL, fill = SType))+
   geom_boxplot()
-ggplot(statsAll, aes(x = Num, y = fill, fill = SType))+
+ggplot(statsAll, aes(x = Num, y = Fill, fill = SType))+
   geom_boxplot()
 
 # statsAll <- as.data.table(statsAll)
