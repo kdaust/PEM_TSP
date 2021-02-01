@@ -23,6 +23,8 @@ library(goftest)
 library(velox)
 require(ggthemes)
 require(philentropy)
+require(ggthemes)
+require(tictoc)
 #install.packages("philentropy")
 
 ```
@@ -218,7 +220,8 @@ acost2 <- mask(acost2, alt)
 ancDatSL_cost <- stack(ancDatSL,acost2)
 
 plot(acost2)
-
+writeRaster(acost, "./Results/acost.tif", format = "GTiff", overwrite = TRUE)
+writeRaster(acost2, "./Results/acost2.tif", format = "GTiff", overwrite = TRUE)
 # png('./outputs/acost2.png', height=nrow(acost2), width=ncol(acost2)) 
 # plot(acost2, maxpixels=ncell(acost2))
 # dev.off()
@@ -396,7 +399,7 @@ collectStats <- function(X,sampleFun,nums,testFun1 = ks_stat_clhs_v3, testFun2 =
   return(test_res)
 }
 
-nums <- round(seq(10, 700, length.out = 8))
+nums <- round(seq(10, 5000, length.out = 11))
 nums <- rep(nums, each = 5)
 statsRand <- collectStats(ancVals,createRandom,nums)
 statsRand$SType <- "Random"
@@ -415,14 +418,28 @@ statsCCLHS$SType <- "CCLHS"
 # }
 
 statsAll <- rbind(statsRand,statsLHS,statsCCLHS)
-statsAll$Num <- as.factor(statsAll$Num)
-statsAll$SType <- as.factor(statsAll$SType)
+statsAll$Num <- round(statsAll$Num, -2) %>% as.factor()
+statsAll$SType <- as.factor(statsAll$SType) %>% factor(levels = c("Random", "LHS", "CCLHS"))
 
+###Graphic of number of points needed to match variable space
 ggplot(statsAll, aes(x = Num, y = KL, fill = SType))+
-  geom_boxplot()
-ggplot(statsAll, aes(x = Num, y = Fill, fill = SType))+
-  geom_boxplot()
+  geom_boxplot()+
+  scale_y_continuous(name = "Kullback-Leibler Divergence", limits=c(0, 8),breaks=seq(0,8,1))+
+  labs(x = "Number of Sample Points") +
+  expand_limits(x = 0, y = 0)+
+  theme_light()
 
+ggsave("./Results/KL_Divergence_Points_method.jpeg", device = 'jpeg', width = 6, height=4, units = "in")
+
+
+ggplot(statsAll, aes(x = Num, y = Fill, fill = SType))+
+  geom_boxplot()+
+  scale_y_continuous(name = "Covariate bins filled", limits=c(0, 8),breaks=seq(0,8,1))+
+  labs(x = "Number of Sample Points") +
+  expand_limits(x = 0, y = 0)+
+  theme_light()
+
+ggsave("./Results/CovariateBins_method.jpeg", device = 'jpeg', width = 6, height=4, units = "in")
 # statsAll <- as.data.table(statsAll)
 # statsAll[, Norm := (KS-min(KS))/(max(KS)-min(KS))]
 # statsAll[,Norm := 1-Norm]
@@ -444,12 +461,17 @@ ggplot(statsAll, aes(x = Num, y = Fill, fill = SType))+
 ```
 
 ```{r num single points}
+
+###this needs to be adjusted to reflect a set KL distance
 statsAll <- as.data.table(statsAll)
 temp <- statsAll[,.(y = median(KL)), by = .(SType,Num)]
-temp[,`:=`(y = (y-min(y))/(max(y)-min(y)), Num = as.numeric(as.character(Num)))]
-numPoints <- temp[,.(nPoints = predict(loess(Num ~ y,data = .SD), data.frame(y = 0.1))), by = .(SType)]
+#temp[,`:=`(y = (y-min(y))/(max(y)-min(y)), Num = as.numeric(as.character(Num)))]
+temp[,`:=`(Num = as.numeric(as.character(Num)))]
+numPoints <- temp[,.(nPoints = predict(loess(Num ~ y,data = .SD), data.frame(y = .5))), by = .(SType)]
+numPoints$nPoints <- round(numPoints$nPoints, -1)
+write.table(numPoints, file = "./Results/Number of points required to match covariate distribution.csv", sep = ",", quote = FALSE, row.names = F)
+knitr::kable(numPoints, digits = -1, caption = "Number of points for KL divergence = 0.5")
 
-knitr::kable(numPoints, digits = 2, caption = "Number of points need for 90% of maximum space filling")
 ```
 
 ### Simulation 2: Transect Sampling
@@ -473,7 +495,7 @@ Xcost <- Xcost[!is.infinite(Xcost$layer),]
 
 ```{r sampling functions}
 ###create LHS transect sample, use clhs to sample transects
-createLHS <- function(X,n){
+createLHS <- function(X,n){ ## X = landscape covariates and n = number of transects
   xMat <- st_drop_geometry(X)
   temp <- clhs(xMat,size = n,cost = NULL,iter = 10000,use.cpp = T,simple = F)
   dat <- X[temp$index_samples,]
@@ -483,19 +505,20 @@ createLHS <- function(X,n){
     tempDat[,ncol(tempDat)]
   }
   idxs <- which(idVals %in% small)
-  sl_lhs <- clhs(ancVals, size = 15*n,possible.sample = idxs,iter = 10000,use.cpp = T,simple = F)
+  sl_lhs <- clhs(ancVals, size = 15*n,possible.sample = idxs,iter = 10000, use.cpp = T, simple = F)
   temp <- sl_lhs$sampled_data
   return(temp)
 }
 
-##create cclhs sample, extract points @ 50m intervals
+##create cclhs sample, extract points @ 5m intervals
 createCCLHS_30m <- function(X,n){
   xMat <- st_drop_geometry(X)
   temp <- clhs(xMat,size = n,cost = ncol(xMat),iter = 10000,use.cpp = T,simple = F)
   dat <- X[temp$index_samples,]
   small <- foreach(j = 1:nrow(dat),.combine = rbind) %do% {
     tri <- Tri_build(id = j, x = st_coordinates(dat[j,])[1],y = st_coordinates(dat[j,])[2])
-    tPs <- st_sample(tri, size = 15, type = "regular")
+    #tPs <- st_sample(tri, size = 30, type = "regular")
+    tPs <- tri
     temp <- suppressWarnings(st_sf(data.frame(id = j, geometry = tPs)) %>%
        st_cast("POINT"))
     temp
@@ -555,23 +578,33 @@ nums <- rep(nums, each = 3) ##replicates of each number (should be at least 5)
 statsLHS_trans <- collectStats(X,createLHS,nums)
 statsLHS_trans$SType = "LHS"
 #fwrite(statsLHS_trans, "LHSNumSave.csv")
+tic()
 statsCCLHS_trans <- collectStats(Xcost,createCCLHS,nums)
 statsCCLHS_trans$SType <- "CCLHS"
+toc()
 #fwrite(statsCCLHS_trans, "CCLHSNumSave.csv")
 
 statsCCLHS_30m <- collectStats(Xcost, createCCLHS_30m, nums)
 statsCCLHS_30m$SType <- "CCLHSReg"
 
 ##plot
-statsAll <- rbind(statsLHS_trans, statsCCLHS_trans,statsCCLHS_30m)
-statsAll$Num <- as.factor(statsAll$Num)
-statsAll$SType <- as.factor(statsAll$SType)
-ggplot(statsAll, aes(x = Num, y = KL, fill = SType))+
+statsAll2 <- rbind(statsLHS_trans, statsCCLHS_trans, statsCCLHS_30m) #
+statsAll2$Num <- as.factor(statsAll2$Num)
+statsAll2$SType <- as.factor(statsAll2$SType)
+ggplot(statsAll2, aes(x = Num, y = KL, fill = SType))+
   geom_boxplot()
-ggplot(statsAll, aes(x = Num, y = Mean, fill = SType))+
+ggplot(statsAll2, aes(x = Num, y = Mean, fill = SType))+
   geom_boxplot()
 
+###Graphic of number of points needed to match variable space
+ggplot(statsAll2, aes(x = Num, y = KL, fill = SType))+
+  geom_boxplot()+
+  scale_y_continuous(name = "Kullback-Leibler Divergence", limits=c(0, 8),breaks=seq(0,8,1))+
+  labs(x = "Number of Sample Points") +
+  expand_limits(x = 0, y = 0)+
+  theme_light()
 
+ggsave("./Results/KL_Divergence_transects_method.jpeg", device = 'jpeg', width = 6, height=4, units = "in")
 #fwrite(statsAll,"statsAll_save.csv")
 
 # KS_transectPlot <- ggplot(statsAll, aes(x = Num, y = KS, fill = SType))+
@@ -580,7 +613,7 @@ ggplot(statsAll, aes(x = Num, y = Mean, fill = SType))+
 #   scale_fill_discrete(guide = guide_legend(reverse=FALSE), name='Sample Method', labels = c('cLHS- cLHS resampled', 'cost cLHS - systematic resampled', 'cost cLHS - cLHS resampled'))+
 #   theme_few()
 # plot(KS_transectPlot)
-# #ggsave("./Results/KS_transect_plot.jpeg", device = 'jpeg')
+#ggsave("./Results/KS_transect_plot.jpeg", device = 'jpeg')
 # 
 # Bfill_transectPlot <- ggplot(statsAll, aes(x = Num, y = fillQual, fill = SType))+
 #   geom_boxplot() +
@@ -597,10 +630,11 @@ ggplot(statsAll, aes(x = Num, y = Mean, fill = SType))+
 ## Calculate number of sites to fill
 
 ```{r num points}
-statsAll <- as.data.table(statsAll)
-temp <- statsAll[,.(y = median(KL)), by = .(SType,Num)]
-temp[,`:=`(y = (y-min(y))/(max(y)-min(y)), Num = as.numeric(as.character(Num)))]
-numTrans <- temp[,.(nTrans = predict(loess(Num ~ y,data = .SD), data.frame(y = 0.2))), by = .(SType)]
+statsAll2 <- as.data.table(statsAll2)
+temp <- statsAll2[,.(y = median(KL)), by = .(SType,Num)]
+#temp[,`:=`(y = (y-min(y))/(max(y)-min(y)), Num = as.numeric(as.character(Num)))]
+temp[,`:=`(Num = as.numeric(as.character(Num)))]
+numTrans <- temp[,.(nTrans = predict(loess(Num ~ y,data = .SD), data.frame(y = 2))), by = .(SType)]
 
 knitr::kable(numTrans, digits = 2, caption = "Number of transects need for 90% of maximum space filling")
 
@@ -761,7 +795,7 @@ collectTime <- function(X,sampleFun, num){
   return(test_res)
 }
 
-trans <- as.integer((seq(5,50,length.out = 5))) ##numbers of transects
+trans <- as.integer((seq(5,45,length.out = 5))) ##numbers of transects
 trans <- rep(trans,each = 10) ##replications at each level
 
 LHSTime <- collectTime(X,timeLHS,num = trans)
@@ -818,7 +852,7 @@ calcCost_tsp <- function(Xcost,n,nTry){
   return(min(tspTime$Cost))
 }
 
-trans <- as.integer((seq(5,50,length.out = 5))) ##numbers of transects
+trans <- as.integer((seq(5,45,length.out = 5))) ##numbers of transects
 trans <- rep(trans,each = 5) ##replications at each level
 
 TSPTime <- foreach(n = trans,.combine = rbind) %do% {
@@ -830,10 +864,16 @@ timeAll <- rbind(LHSTime,CCLHSTime,TSPTime)
 timeAll$Cost <- timeAll$Cost/480 ##covert from minutes to 8-hour days
 
 timeAll$Num <- as.factor(timeAll$Num)
-timeAll$Type <- as.factor(timeAll$Type)
+timeAll$Type <- as.factor(timeAll$Type) %>% factor(levels = c( "LHS", "CCLHS", "TSP"))
 
 ggplot(timeAll, aes(x = Num, y = Cost, fill = Type))+
-  geom_boxplot()
+  geom_boxplot()+
+  scale_y_continuous(name = "Number of 8-hour days", limits=c(0, 15),breaks=seq(0,15,1))+
+  labs(x = "Number of Sample Sites in Sample Plan") +
+  expand_limits(x = 0, y = 0)+
+  scale_fill_discrete (name= 'Method', labels = c('cLHS', 'cost-constrained cLHS',  'Travelling Salesman Optimized')) +
+  theme_light()
+ggsave("./Results/CostsbyTransectMethod.jpeg", device = 'jpeg')
 
 # Time_plot <- ggplot(timeAll, aes(x = Num, y = Cost, fill = Type)) +
 #   geom_boxplot() +
@@ -849,7 +889,6 @@ ggplot(timeAll, aes(x = Num, y = Cost, fill = Type))+
 #   ) +
 #   theme_few()
 # plot(Bfill_transectPlot2)
-# ggsave("./Results/KS_transectPlot2.jpeg", device = 'jpeg')
 ```
 
 ## Example TSP Route
@@ -972,11 +1011,11 @@ numNeeded <- numPoints[SType == "CCLHS",as.integer(nPoints)]
 pkgs <- c("Rcpp","LaplacesDemon", "foreach","sf",
         "raster","LearnGeom","dplyr","reticulate","gdistance","scales","clhs")
 
-## note this part takes about 10 mins
-SPoint <- foreach(n = 1:(nSims*5), .combine = rbind, .packages = pkgs,
+## note this part takes about 10 mins (should be nSims*5)
+SPoint <- foreach(n = 1:(nSims*3), .combine = rbind, .packages = pkgs,
                   .export = c("start_sf","trSmall", "calcCost_clhs","allSLDat")) %dopar% { #
                     reticulate::source_python("mTSP.py")
-                    templhs <- clhs(allSLDat,size = as.integer(numNeeded/4),cost = ncol(allSLDat),use.cpp = T, iter = 6000,simple = F)
+                    templhs <- clhs(allSLDat,size = as.integer(numNeeded/4),cost = ncol(allSLDat),use.cpp = T, iter = 6000,simple = F)#6000
                     tempdat <- templhs$sampled_data
                     cellNums <- as.numeric(rownames(tempdat))
                     dat <- raster::xyFromCell(ancDatSL_cost,cell = cellNums, sp = T)
