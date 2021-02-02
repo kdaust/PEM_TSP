@@ -234,6 +234,12 @@ For all the following simulations we're testing with random samples, LHS samples
 There are different ways of testing space filling: in the below code, we use KS statistics, a simple bin fill function
 
 ```{r setup distribtuion and test functions}
+ancDatSL <- raster::stack(covars)
+proj4string(ancDatSL) <- "+init=epsg:3005"
+layerNamesSl <- names(ancDatSL) ##need to change this if you change the layers
+for(i in layerNamesSl){
+  ancDatSL[[i]][ancDatSL[[i]] > quantile(ancDatSL[[i]],0.9, na.rm = T)] <- NA
+}
 tempID <- ancDatSL$twi
 tempID[] <- 1:(nrow(tempID)*ncol(tempID))
 names(tempID) <- "CellID"
@@ -252,7 +258,7 @@ ks_stat_clhs_v3 <- function(sample){
   sampDat <- na.omit(sampDat)
   nsamp <- nrow(sampDat)
   
-  ancBin <- ancVals[,lapply(.SD, function(x){cut(x,breaks = seq(min(x),max(x),length.out = 15),labels = F,include.lowest = T)})]
+  ancBin <- ancVals[,lapply(.SD, function(x){cut(x,breaks = seq(min(x),max(x),length.out = 9),labels = F,include.lowest = T)})]
   ancBin <- copy(unite(ancBin, LHSVar, sep = "_"))
   ancSmall <- ancBin[,.(Num = .N), by = .(LHSVar)] ##count occurences
   ancSmall <- ancSmall[Num > 150,] ##remove uncommon
@@ -261,7 +267,7 @@ ks_stat_clhs_v3 <- function(sample){
   ancBin[ancSmall, ID := i.ID, on = "LHSVar"]
   ancBin <- na.omit(ancBin)
   
-  fullBreaks <- ancVals[,lapply(.SD,function(x){seq(min(x),max(x),length.out = 15)})]
+  fullBreaks <- ancVals[,lapply(.SD,function(x){seq(min(x),max(x),length.out = 9)})]
   ##split into same bins as full data set
   for(i in 1:ncol(sampDat)){
     sampDat[[i]] <- cut(sampDat[[i]],breaks = fullBreaks[[i]], labels = F, include.lowest = T)
@@ -979,6 +985,7 @@ Instead of just calculating the time cost for different numbers of transects, we
 
 ```{r num}
 nSims <- 20
+nRep <- 3
 
 collectTime2 <- function(X,sampleFun,num, nReps, plotTime = 50L, minNum = 3L){
   pkgs <- c("Rcpp","LaplacesDemon", "foreach","sf",
@@ -1010,7 +1017,7 @@ pkgs <- c("Rcpp","LaplacesDemon", "foreach","sf",
         "raster","LearnGeom","dplyr","reticulate","gdistance","scales","clhs")
 
 ## note this part takes about 10 mins (should be nSims*5)
-SPoint <- foreach(n = 1:(nSims*3), .combine = rbind, .packages = pkgs,
+SPoint <- foreach(n = 1:(nSims*nRep), .combine = rbind, .packages = pkgs,
                   .export = c("start_sf","trSmall", "calcCost_clhs","allSLDat")) %dopar% { #
                     reticulate::source_python("mTSP.py")
                     templhs <- clhs(allSLDat,size = as.integer(numNeeded/4),cost = ncol(allSLDat),use.cpp = T, iter = 6000,simple = F)#6000
@@ -1029,7 +1036,7 @@ SPoint <- foreach(n = 1:(nSims*3), .combine = rbind, .packages = pkgs,
                   }
 
 SPoint <- as.data.table(SPoint)
-SPoint[,TSPNum := rep(c(1:5),each = nSims)]
+SPoint[,TSPNum := rep(c(1:nRep),each = nSims)]
 TSPpoint <- SPoint[,.(Cost = min(Cost)), by = .(TSPNum)]
 TSPpoint[,SType := "Single Point TSP"]
 setnames(TSPpoint, old = "TSPNum", new = "Rep")
