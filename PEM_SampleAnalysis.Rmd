@@ -606,12 +606,12 @@ statsAll2$SType <- as.factor(statsAll2$SType)%>% factor(levels = c("All_points",
 ###Graphic of number of transects needed to match variable space
 ggplot(statsAll2, aes(x = Num, y = KL, fill = SType))+
   geom_boxplot()+
-  scale_y_continuous(name = "Kullback-Leibler Divergence", limits=c(0, 8),breaks=seq(0,8,1))+
+  scale_y_continuous(name = "Kolmogorov-Smirnov (KS) statistic", limits=c(0, 8),breaks=seq(0,8,1))+
   labs(x = "Number of Transects") +
   scale_fill_discrete(name='Sample Method', labels = c('all points', 'cLHS subsampled'))+
   expand_limits(x = 0, y = 0)+
   geom_hline(yintercept = 1, linetype = "dashed", color = "red")+
-   geom_smooth(method = "loess", se=FALSE, aes(group=SType), color = "black", size = .5)
+   geom_smooth(method = "loess", se=FALSE, aes(group=SType), color = "black", size = .5)+
   theme_light()
 
 ggsave("./Results/KL_Divergence_transect_subsampling.jpeg", device = 'jpeg', width = 6, height=4, units = "in")
