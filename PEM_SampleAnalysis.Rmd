@@ -400,8 +400,8 @@ collectStats <- function(X,sampleFun,nums,testFun1 = ks_stat_clhs_v3, testFun2 =
 }
 ```
 
-```{r univariate distributions}
-s1 <- createLHS(ancVals,400)
+```{r univariate distributions examples}
+s1 <- createLHS(ancVals,2000)
 s2 <- createRandom(ancVals,400)
 plotUniDists(s1)
 plotUniDists(s2)
@@ -419,30 +419,33 @@ statsLHS$SType <- "LHS"
 statsCCLHS <- collectStats(allSLDat,createCCLHS, nums)
 statsCCLHS$SType <- "CCLHS"
 
-statsAll <- rbind(statsRand,statsLHS,statsCCLHS)
+statsAll <- rbind(statsRand,statsLHS,statsCCLHS)%>% filter(Num < 3200) ###filter to remove some categories after the fact for grtaph
 statsAll$Num <- round(statsAll$Num, -2) %>% as.factor()
 statsAll$SType <- as.factor(statsAll$SType) %>% factor(levels = c("Random", "LHS", "CCLHS"))
 
 ###Graphic of number of points needed to match variable space
+statsAll <- statsAll 
 ggplot(statsAll, aes(x = Num, y = KL, fill = SType))+
   geom_boxplot()+
-  scale_y_continuous(name = "Kullback-Leibler Divergence", limits=c(0, 8),breaks=seq(0,8,1))+
-  labs(x = "Number of Sample Points") +
+   scale_y_continuous(name = "Kullback-Leibler Divergence", limits=c(0, 8),breaks=seq(0,8,1))+
+  #labs(x = "Number of Sample Points") +
+   scale_fill_discrete(name='Sample Method', labels = c('random', 'cLHS', 'cost cLHS' ))+
   expand_limits(x = 0, y = 0)+
+  #xlim(0,3000)+
   theme_light()
 
 ggsave("./Results/KL_Divergence_Points_method.jpeg", device = 'jpeg', width = 6, height=4, units = "in")
 
-
-ggplot(statsAll, aes(x = Num, y = Fill, fill = SType))+
-  geom_boxplot()+
-  scale_y_continuous(name = "Covariate bins filled", limits=c(0, 8),breaks=seq(0,8,1))+
-  labs(x = "Number of Sample Points") +
-  expand_limits(x = 0, y = 0)+
-  theme_light()
-
-ggsave("./Results/CovariateBins_method.jpeg", device = 'jpeg', width = 6, height=4, units = "in")
-# statsAll <- as.data.table(statsAll)
+# 
+# ggplot(statsAll, aes(x = Num, y = Fill, fill = SType))+
+#   geom_boxplot()+
+#   scale_y_continuous(name = "Covariate bins filled", limits=c(0, 8),breaks=seq(0,8,1))+
+#   labs(x = "Number of Sample Points") +
+#   expand_limits(x = 0, y = 0)+
+#   theme_light()
+# 
+# ggsave("./Results/CovariateBins_method.jpeg", device = 'jpeg', width = 6, height=4, units = "in")
+ # statsAll <- as.data.table(statsAll)
 # statsAll[, Norm := (KS-min(KS))/(max(KS)-min(KS))]
 # statsAll[,Norm := 1-Norm]
 # KSplot <- ggplot(statsAll, aes(x = Num, y = Norm, fill = SType))+
@@ -469,10 +472,10 @@ statsAll <- as.data.table(statsAll)
 temp <- statsAll[,.(y = median(KL)), by = .(SType,Num)]
 #temp[,`:=`(y = (y-min(y))/(max(y)-min(y)), Num = as.numeric(as.character(Num)))]
 temp[,`:=`(Num = as.numeric(as.character(Num)))]
-numPoints <- temp[,.(nPoints = predict(loess(Num ~ y,data = .SD), data.frame(y = .5))), by = .(SType)]
+numPoints <- temp[,.(nPoints = predict(loess(Num ~ y,data = .SD), data.frame(y = 1))), by = .(SType)]
 numPoints$nPoints <- round(numPoints$nPoints, -1)
 write.table(numPoints, file = "./Results/Number of points required to match covariate distribution.csv", sep = ",", quote = FALSE, row.names = F)
-knitr::kable(numPoints, digits = -1, caption = "Number of points for KL divergence = 0.5")
+knitr::kable(numPoints, digits = -1, caption = "Number of points for KL divergence = 1")
 
 ```
 
@@ -576,39 +579,42 @@ collectStats <- function(X,sampleFun, nums, testFun1 = ks_stat_clhs_v3,testFun2 
 ```
 
 ```{r run simulations transect}
-nums <- round(seq(5, 100, length.out = 6)) ##set sequence of transect number
-nums <- rep(nums, each = 3) ##replicates of each number (should be at least 5)
+nums <- round(seq(6, 100, length.out = 10), -1) ##set sequence of transect number
+nums <- rep(nums, each = 5) ##replicates of each number (should be at least 5)
 
-statsLHS_trans <- collectStats(X,createLHS,nums)
-statsLHS_trans$SType = "LHS"
+# statsLHS_trans <- collectStats(X,createLHS,nums)
+# statsLHS_trans$SType = "LHS"
 
 tic()
 statsCCLHS_trans <- collectStats(Xcost,createCCLHS,nums)
-statsCCLHS_trans$SType <- "CCLHS"
+statsCCLHS_trans$SType <- "cLHS_resample"
 toc()
 
 
 statsCCLHS_30m <- collectStats(Xcost, createCCLHS_30m, nums)
-statsCCLHS_30m$SType <- "CCLHSReg"
+statsCCLHS_30m$SType <- "All_points"
 
 ##plot
-statsAll2 <- rbind(statsLHS_trans, statsCCLHS_trans, statsCCLHS_30m) #
+statsAll2 <- rbind(statsCCLHS_trans, statsCCLHS_30m) #statsLHS_trans, 
 statsAll2$Num <- as.factor(statsAll2$Num)
-statsAll2$SType <- as.factor(statsAll2$SType)
-ggplot(statsAll2, aes(x = Num, y = KL, fill = SType))+
-  geom_boxplot()
-ggplot(statsAll2, aes(x = Num, y = Mean, fill = SType))+
-  geom_boxplot()
+statsAll2$SType <- as.factor(statsAll2$SType)%>% factor(levels = c("All_points", "cLHS_resample"))
+# ggplot(statsAll2, aes(x = Num, y = KL, fill = SType))+
+#   geom_boxplot()
+# ggplot(statsAll2, aes(x = Num, y = Mean, fill = SType))+
+#   geom_boxplot()
 
-###Graphic of number of points needed to match variable space
+###Graphic of number of transects needed to match variable space
 ggplot(statsAll2, aes(x = Num, y = KL, fill = SType))+
   geom_boxplot()+
   scale_y_continuous(name = "Kullback-Leibler Divergence", limits=c(0, 8),breaks=seq(0,8,1))+
-  labs(x = "Number of Sample Points") +
+  labs(x = "Number of Transects") +
+  scale_fill_discrete(name='Sample Method', labels = c('all points', 'cLHS subsampled'))+
   expand_limits(x = 0, y = 0)+
+  geom_hline(yintercept = 1, linetype = "dashed", color = "red")+
+   geom_smooth(method = "loess", se=FALSE, aes(group=SType), color = "black", size = .5)
   theme_light()
 
-ggsave("./Results/KL_Divergence_transects_method.jpeg", device = 'jpeg', width = 6, height=4, units = "in")
+ggsave("./Results/KL_Divergence_transect_subsampling.jpeg", device = 'jpeg', width = 6, height=4, units = "in")
 #fwrite(statsAll,"statsAll_save.csv")
 
 # KS_transectPlot <- ggplot(statsAll, aes(x = Num, y = KS, fill = SType))+
@@ -638,9 +644,9 @@ statsAll2 <- as.data.table(statsAll2)
 temp <- statsAll2[,.(y = median(KL)), by = .(SType,Num)]
 #temp[,`:=`(y = (y-min(y))/(max(y)-min(y)), Num = as.numeric(as.character(Num)))]
 temp[,`:=`(Num = as.numeric(as.character(Num)))]
-numTrans <- temp[,.(nTrans = predict(loess(Num ~ y,data = .SD), data.frame(y = 2))), by = .(SType)]
+numTrans <- temp[,.(nTrans = predict(loess(Num ~ y,data = .SD), data.frame(y = 1))), by = .(SType)]
 
-knitr::kable(numTrans, digits = 2, caption = "Number of transects need for 90% of maximum space filling")
+knitr::kable(numTrans, digits = 2, caption = "Number of points for KL divergence = 1")
 
 # calcNumTrans <- function(tempDat){
 #   temp <- tempDat[,.(y = median(fillQual)), by = .(Num)]
@@ -720,7 +726,7 @@ knitr::kable(tspSum)
 
 ## Simulation 3: Sampling Time
 
-The previous chunks investigated how variable space filling changed with different sampling strategies. We now apply the same process, but collect results on the amount of time each plan would take (as determined by the TSP). We use similar sampling plans as in the above chunks: cost-constrained clhs, regular clhs, and TSP (cost-constrained clhs optimised using the TSP). First, we run the simulations as above, with  increasing numbers of transects and multiple replications at each level. We then simulate the cost to fill the variable space to 90% as calculated above, using each of these methods, and present a sample TSP route.
+The previous chunks investigated how variable space filling changed with different sampling strategies. We now apply the same process, but collect results on the amount of time each plan would take (as determined by the TSP). We use similar sampling plans as in the above chunks: cost-constrained clhs, regular clhs, and TSP (cost-constrained clhs optimised using the TSP). First, we run the simulations as above, with  increasing numbers of transects and multiple replications at each level. We then simulate the cost to fill the variable space to KL = 1 as calculated above, using each of these methods, and present a sample TSP route.
 
 ```{r time cost}
 ##create TSP to calculate time
@@ -799,7 +805,7 @@ collectTime <- function(X,sampleFun, num){
   return(test_res)
 }
 
-trans <- as.integer((seq(5,45,length.out = 5))) ##numbers of transects
+trans <- as.integer(c(5, 10, 15, 20, 25, 30, 35, 40, 45, 50)) ##numbers of transects
 trans <- rep(trans,each = 10) ##replications at each level
 
 LHSTime <- collectTime(X,timeLHS,num = trans)
@@ -856,8 +862,8 @@ calcCost_tsp <- function(Xcost,n,nTry){
   return(min(tspTime$Cost))
 }
 
-trans <- as.integer((seq(5,45,length.out = 5))) ##numbers of transects
-trans <- rep(trans,each = 5) ##replications at each level
+# trans <- as.integer(c(5, 10, 15, 20, 25, 30, 35, 40, 45, 50)) ##numbers of transects
+# trans <- rep(trans,each = 5) ##replications at each level
 
 TSPTime <- foreach(n = trans,.combine = rbind) %do% {
   time <- calcCost_tsp(Xcost,n,15)
@@ -977,6 +983,8 @@ for(i in 0:(length(result)-1)){
   p2$Order[p1] <- 1:length(p1)
 }
 p2 <- st_transform(p2, 3005)
+
+
 ```
 
 ## Time to fill variable space
@@ -1044,32 +1052,38 @@ SPoint[,TSPNum := NULL]
 SPoint[,SType := "Single Point CLHS"]
 
 ##clhs resampled clhs
-numNeeded <- numTrans[SType == "CCLHS",as.integer(nTrans)]
-clhsTime <- collectTime2(Xcost,timeCCLHS,numNeeded,nSims)
-clhsTime$SType <- "CLHS_Resample"
+# numNeeded <- numTrans[SType == "CCLHS",as.integer(nTrans)]
+# clhsTime <- collectTime2(Xcost,timeCCLHS,numNeeded,nSims)
+# clhsTime$SType <- "CLHS_Resample"
 
 ##clhs regular resampling
-numNeeded <- numTrans[SType == "CCLHSReg",as.integer(nTrans)]
+numNeeded <- numTrans[SType == "cLHS_resample",as.integer(nTrans)]
 clhsregTime <- collectTime2(Xcost,timeCCLHS,numNeeded,nSims)
 clhsregTime$SType <- "CLHS_Regular"
 
 ##clhs optimised using TSP
 nSims <- 5
-numNeeded <- numTrans[SType == "CCLHS",as.integer(nTrans)]
+numNeeded <- numTrans[SType == "cLHS_resample",as.integer(nTrans)]
 tspTime <- foreach(n = 1:(nSims),.combine = rbind) %do% {
   time <- calcCost_tsp(Xcost,numNeeded,15)
   data.frame(Rep = n, Cost = time)
 }
-tspTime$SType <- "TSP_Optimised"
+tspTime$SType <- "Transects_TSP"
 
-timeAll <- rbind(SPoint,TSPpoint,clhsTime,clhsregTime,tspTime)
+timeAll <- rbind(TSPpoint,tspTime)#clhsTime,SPoint,clhsregTime,
 timeAll <- as.data.table(timeAll)
 timeAll[,Cost := Cost/480]
 timeAll[,SType := as.factor(SType)]
 timeAll[,SType := reorder(SType,Cost, FUN = function(x){-mean(x)})]
 
 ggplot(timeAll, aes(x = SType, y = Cost))+
-  geom_boxplot()
+  geom_boxplot()+
+    scale_y_continuous(name = "Number of 8-hour days", limits=c(0, 30),breaks=seq(0,30,10))+
+  labs(x = "Number of Sample Sites in Sample Plan") +
+  expand_limits(x = 0, y = 0)+
+  scale_fill_discrete (name= 'Method', labels = c('cLHS', 'cost-constrained cLHS',  'Travelling Salesman Optimized')) +
+  theme_light()
+ggsave("./Results/CostsTransectvsPointsMethod.jpeg", device = 'jpeg', width = 4, height = 4)
 ```
 
 ## Compare SS transect data to covariate space with DataExplorer
