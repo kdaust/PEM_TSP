@@ -277,9 +277,7 @@ ks_stat_clhs_v3 <- function(sample){
   fullDat[,SampNum := SampNum/sum(SampNum)]
   fullDat[,Num := Num/sum(Num)]
   tempMat <- rbind(fullDat$Num,fullDat$SampNum)
-  # fullDat <- melt(fullDat, id.vars = c("LHSVar","ID"))
-  # print(ggplot(fullDat, aes(x = ID, y = value, col = variable))+
-  #   geom_line())
+
   kl2 <- KL(tempMat)
   return(kl2)
 }
@@ -307,11 +305,7 @@ ks_stat_clhs_v4 <- function(sample){
   sampBin <- copy(unite(sampDat,sampLHS,sep = "_"))
   sampBin[ancSmall, ID := i.ID, on = c(sampLHS = "LHSVar")]
   sampBin <- na.omit(sampBin)
-  
-  # print(ggplot(tempDat, aes(x = ID, y = value, colour = variable))+
-  #   geom_bar(stat = "identity", position = "dodge"))
-  # tempMat <- rbind(fullDens,smallDens)
-  # return(KL(tempMat))
+
   sampBin <- sampBin[,.(SampNum = .N), by = .(sampLHS)]##count
   #merge to compare
   fullDat <- copy(ancSmall)
@@ -323,44 +317,44 @@ ks_stat_clhs_v4 <- function(sample){
   return(mean(fullDat$Diff))
 }
 
-# {
-#   sampDat <- as.data.table(rand)
-#   ##split into same bins as full data set
-#   for(i in 1:ncol(sampDat)){
-#     sampDat[[i]] <- cut(sampDat[[i]],breaks = ancQuants[[i]], labels = F, include.lowest = T)
-#   }
-#   sampBin <- copy(unite(sampDat,sampLHS,sep = ""))
-#   sampBin[,sampLHS := as.numeric(sampLHS)]
-#   sampBin[ancSmall, ID := i.ID, on = c(sampLHS = "LHSVar")]
-#   sampBin <- na.omit(sampBin)
-#   smallHist <- hist(sampBin$ID, breaks = fullBreaks)
-#   smallDens <- smallHist$counts/sum(smallHist$counts)
-#   sum(abs(fullDens - smallDens))
-#   
-#   sampBin <- sampBin[,.(SampNum = .N), by = .(sampLHS)]##count
-#   ##merge to compare
-#   fullDat <- copy(ancSmall)
-#   fullDat[sampBin, SampNum := i.SampNum, on = c(LHSVar = "sampLHS")]
-#   fullDat[is.na(SampNum), SampNum := 0]
-#   fullDat[,SampNum := SampNum/sum(SampNum)]
-#   fullDat[,Num := Num/sum(Num)]
-#   fullDat[,MAvg := frollmean(SampNum, n = 15, align = "left")]
-#   fullDat <- na.omit(fullDat)
-#   fullDat[,MAvg := MAvg/sum(MAvg)]
-#   tempMat <- rbind(fullDat$Num,fullDat$MAvg)
-#   kl2 <- KL(tempMat)
-#   fullDat[,SampNum := NULL]
-#   fullDat[,LHSID := seq_along(Num)]
-#   fullDat <- melt(fullDat, id.vars = c("LHSID","LHSVar"))
-#   ggplot(fullDat, aes(x = LHSID, y = value, col = variable))+
-#     geom_line()
-# 
-# }
+plotUniDists <- function(sample){
+  sampDat <- as.data.table(sample)
+  sampDat <- na.omit(sampDat)
+  nsamp <- nrow(sampDat)
+  
+  ancBin <- ancVals[,lapply(.SD, function(x){cut(x,breaks = seq(min(x),max(x),length.out = 9),labels = F,include.lowest = T)})]
+  ancBin <- copy(unite(ancBin, LHSVar, sep = "_"))
+  ancSmall <- ancBin[,.(Num = .N), by = .(LHSVar)] ##count occurences
+  ancSmall <- ancSmall[Num > 150,] ##remove uncommon
+  setorder(ancSmall,-Num)
+  ancSmall[,ID := seq_along(Num)]
+  ancBin[ancSmall, ID := i.ID, on = "LHSVar"]
+  ancBin <- na.omit(ancBin)
+  
+  fullBreaks <- ancVals[,lapply(.SD,function(x){seq(min(x),max(x),length.out = 9)})]
+  ##split into same bins as full data set
+  for(i in 1:ncol(sampDat)){
+    sampDat[[i]] <- cut(sampDat[[i]],breaks = fullBreaks[[i]], labels = F, include.lowest = T)
+  }
+  sampBin <- copy(unite(sampDat,sampLHS,sep = "_"))
+  sampBin[ancSmall, ID := i.ID, on = c(sampLHS = "LHSVar")]
+  sampBin <- na.omit(sampBin)
+  sampBin <- sampBin[,.(SampNum = .N), by = .(sampLHS)]##count
+  #merge to compare
+  fullDat <- copy(ancSmall)
+  fullDat[sampBin, SampNum := i.SampNum, on = c(LHSVar = "sampLHS")]
+  fullDat[is.na(SampNum), SampNum := 0]
+  fullDat[,SampNum := SampNum/sum(SampNum)]
+  fullDat[,Num := Num/sum(Num)]
+  fullDat <- melt(fullDat, id.vars = c("LHSVar","ID"))
+  print(ggplot(fullDat, aes(x = ID, y = value, col = variable))+
+    geom_line())
 
+}
 ```
 
 
-```{r single point}
+```{r sample functions single point}
 ##single points clhs sampled
 allSLDat <- as.data.frame(getValues(ancDatSL_cost))##table of SL data
 #allSLDat[,CellID := seq_along(allSLDat$twi)]
@@ -398,6 +392,17 @@ collectStats <- function(X,sampleFun,nums,testFun1 = ks_stat_clhs_v3, testFun2 =
                     }
   return(test_res)
 }
+```
+
+```{r univariate distributions}
+s1 <- createLHS(ancVals,400)
+s2 <- createRandom(ancVals,400)
+plotUniDists(s1)
+plotUniDists(s2)
+```
+
+
+```{r run and plot simulations}
 
 nums <- round(seq(10, 5000, length.out = 11))
 nums <- rep(nums, each = 5)
@@ -407,15 +412,6 @@ statsLHS <- collectStats(ancVals,createLHS, nums)
 statsLHS$SType <- "LHS"
 statsCCLHS <- collectStats(allSLDat,createCCLHS, nums)
 statsCCLHS$SType <- "CCLHS"
-
-# n = 200
-# out <- foreach(i = 1:5, .combine = rbind) %do% {
-#   sample <- createRandom(ancVals,n)
-#   randOut <- ks_stat_clhs_v2(sample)
-#   sample <- createLHS(ancVals,n)
-#   lhsOut <- ks_stat_clhs_v2(sample)
-#   data.table(it = i, Random = randOut, LHS = lhsOut)
-# }
 
 statsAll <- rbind(statsRand,statsLHS,statsCCLHS)
 statsAll$Num <- round(statsAll$Num, -2) %>% as.factor()
@@ -505,7 +501,8 @@ createLHS <- function(X,n){ ## X = landscape covariates and n = number of transe
     tempDat[,ncol(tempDat)]
   }
   idxs <- which(idVals %in% small)
-  sl_lhs <- clhs(ancVals, size = 15*n,possible.sample = idxs,iter = 10000, use.cpp = T, simple = F)
+  nPoints <- as.integer(length(idxs)*0.85) ##this value should be calibrated
+  sl_lhs <- clhs(ancVals, size = nPoints,possible.sample = idxs,iter = 10000, use.cpp = T, simple = F)
   temp <- sl_lhs$sampled_data
   return(temp)
 }
@@ -542,7 +539,8 @@ createCCLHS <- function(X,n){
     tempDat[,ncol(tempDat)]
   }
   idxs <- which(idVals %in% small)
-  sl_lhs <- clhs(ancVals, size = 15*n,possible.sample = idxs,iter = 10000,use.cpp = T,simple = F)
+  nPoints <- as.integer(length(idxs)*0.85)
+  sl_lhs <- clhs(ancVals, size = nPoints,possible.sample = idxs,iter = 10000,use.cpp = T,simple = F)
   temp <- sl_lhs$sampled_data
   return(temp)
 }
@@ -571,18 +569,18 @@ collectStats <- function(X,sampleFun, nums, testFun1 = ks_stat_clhs_v3,testFun2 
 }
 ```
 
-```{r run simulations}
+```{r run simulations transect}
 nums <- round(seq(5, 100, length.out = 6)) ##set sequence of transect number
 nums <- rep(nums, each = 3) ##replicates of each number (should be at least 5)
 
 statsLHS_trans <- collectStats(X,createLHS,nums)
 statsLHS_trans$SType = "LHS"
-#fwrite(statsLHS_trans, "LHSNumSave.csv")
+
 tic()
 statsCCLHS_trans <- collectStats(Xcost,createCCLHS,nums)
 statsCCLHS_trans$SType <- "CCLHS"
 toc()
-#fwrite(statsCCLHS_trans, "CCLHSNumSave.csv")
+
 
 statsCCLHS_30m <- collectStats(Xcost, createCCLHS_30m, nums)
 statsCCLHS_30m$SType <- "CCLHSReg"
