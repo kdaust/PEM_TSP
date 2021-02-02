@@ -253,7 +253,7 @@ idVals <- ancVals$CellID
 ancVals[,CellID := NULL]
 
 ##KL statistic (this one works best)
-ks_stat_clhs_v3 <- function(sample){
+KL_stat_clhs <- function(sample){
   sampDat <- as.data.table(sample)
   sampDat <- na.omit(sampDat)
   nsamp <- nrow(sampDat)
@@ -289,7 +289,7 @@ ks_stat_clhs_v3 <- function(sample){
 }
 
 ##using KS statistic
-ks_stat_clhs_v4 <- function(sample){
+KS_stat_clhs <- function(sample){
   sampDat <- as.data.table(sample)
   sampDat <- na.omit(sampDat)
   nsamp <- nrow(sampDat)
@@ -319,8 +319,11 @@ ks_stat_clhs_v4 <- function(sample){
   fullDat[is.na(SampNum), SampNum := 0]
   fullDat[,SampNum := SampNum/sum(SampNum)]
   fullDat[,Num := Num/sum(Num)]
-  fullDat[,Diff := abs(Num - SampNum)]
-  return(mean(fullDat$Diff))
+  t1 <- cumsum(fullDat$SampNum)
+  t2 <- cumsum(fullDat$Num)
+  return(max(abs(t2-t1)))
+  # fullDat[,Diff := abs(Num - SampNum)]
+  # return(mean(fullDat$Diff))
 }
 
 plotUniDists <- function(sample){
@@ -552,7 +555,7 @@ createCCLHS <- function(X,n){
 }
 
 ##function to run simulations
-collectStats <- function(X,sampleFun, nums, testFun1 = ks_stat_clhs_v3,testFun2 = ks_stat_clhs_v4){
+collectStats <- function(X,sampleFun, nums, testFun1 = KL_stat_clhs,testFun2 = KS_stat_clhs){
   pkgs <- c("Rcpp","philentropy", "foreach","sf",
           "raster","LearnGeom","dplyr","reticulate","gdistance","scales","velox","clhs","data.table","tidyr")
   test_res <- foreach(n = nums, .combine = rbind, .packages = pkgs,
@@ -563,9 +566,7 @@ collectStats <- function(X,sampleFun, nums, testFun1 = ks_stat_clhs_v3,testFun2 
                       if(nrow(smallSet) > 1){
                         res1 <- testFun1(sample = smallSet)
                         res2 <- testFun2(sample = smallSet)
-                        #res3 <- testFun3(full = ancVals, small = smallSet)
-                        #res2 <- testFun2(ancDat,smallSet)
-                        data.frame(Num = n,KL = res1, Mean = res2)
+                        data.frame(Num = n,KL = res1, KS = res2)
                       }else{
                         NULL
                       }
@@ -582,11 +583,8 @@ nums <- rep(nums, each = 3) ##replicates of each number (should be at least 5)
 statsLHS_trans <- collectStats(X,createLHS,nums)
 statsLHS_trans$SType = "LHS"
 
-tic()
 statsCCLHS_trans <- collectStats(Xcost,createCCLHS,nums)
 statsCCLHS_trans$SType <- "CCLHS"
-toc()
-
 
 statsCCLHS_30m <- collectStats(Xcost, createCCLHS_30m, nums)
 statsCCLHS_30m$SType <- "CCLHSReg"
@@ -597,7 +595,7 @@ statsAll2$Num <- as.factor(statsAll2$Num)
 statsAll2$SType <- as.factor(statsAll2$SType)
 ggplot(statsAll2, aes(x = Num, y = KL, fill = SType))+
   geom_boxplot()
-ggplot(statsAll2, aes(x = Num, y = Mean, fill = SType))+
+ggplot(statsAll2, aes(x = Num, y = KS, fill = SType))+
   geom_boxplot()
 
 ###Graphic of number of points needed to match variable space
