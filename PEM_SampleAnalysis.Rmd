@@ -253,7 +253,8 @@ idVals <- ancVals$CellID
 ancVals[,CellID := NULL]
 
 ##KL statistic (this one works best)
-ks_stat_clhs_v3 <- function(sample){
+xx <- KL_stat_clhs(s1)
+KL_stat_clhs <- function(sample){
   sampDat <- as.data.table(sample)
   sampDat <- na.omit(sampDat)
   nsamp <- nrow(sampDat)
@@ -284,12 +285,16 @@ ks_stat_clhs_v3 <- function(sample){
   fullDat[,Num := Num/sum(Num)]
   tempMat <- rbind(fullDat$Num,fullDat$SampNum)
 
-  kl2 <- KL(tempMat)
-  return(kl2)
+  kl2 <- KL(tempMat) ## return KL divergence
+  js2 <- JSD(tempMat) ## returns JS divergenxe
+  temp <- t(tempMat)# %>% dplyr::select()
+  ks2 <- ks.test(temp[,1], temp[,2])
+  ks2p <- ks2$p.value## returns KS statistic and p value
+  return(kl2)#kl2, ,ks2p js2, js2, ks2$statistic))
 }
-
+#sample = s2
 ##using KS statistic
-ks_stat_clhs_v4 <- function(sample){
+KS_stat_clhs <- function(sample){
   sampDat <- as.data.table(sample)
   sampDat <- na.omit(sampDat)
   nsamp <- nrow(sampDat)
@@ -319,10 +324,13 @@ ks_stat_clhs_v4 <- function(sample){
   fullDat[is.na(SampNum), SampNum := 0]
   fullDat[,SampNum := SampNum/sum(SampNum)]
   fullDat[,Num := Num/sum(Num)]
-  fullDat[,Diff := abs(Num - SampNum)]
-  return(mean(fullDat$Diff))
+  #fullDat[,Diff := abs(Num - SampNum)]
+  t1 <- cumsum(fullDat$SampNum)
+  t2 <- cumsum(fullDat$Num)
+  return(max(abs(t2-t1)))
+  #return(mean(fullDat$Diff))
 }
-
+#sample = s1
 plotUniDists <- function(sample){
   sampDat <- as.data.table(sample)
   sampDat <- na.omit(sampDat)
@@ -353,10 +361,20 @@ plotUniDists <- function(sample){
   fullDat[,SampNum := SampNum/sum(SampNum)]
   fullDat[,Num := Num/sum(Num)]
   fullDat <- melt(fullDat, id.vars = c("LHSVar","ID"))
-  print(ggplot(fullDat, aes(x = ID, y = value, col = variable))+
-    geom_line())
+  require(ggsci)
+  print(ggplot(fullDat, aes(x = ID, y = value, col = variable, group = variable))+
+    geom_line(size = .5, position=position_dodge(width=5))+
+    scale_size_manual(values=c(2,2))+  
+      scale_y_continuous(name = "Bin ratio of total map area") + #, limits=c(0, 8),breaks=seq(0,8,1))
+    scale_color_aaas( name='Covariate Bin Distribution', labels = c('map area', 'cLHS point sample'))+
+      scale_linetype_manual(values=c("solid", "dotted"))+
+    expand_limits(x = 0, y = 0) +
+  xlab("Multivariate Bins")+
+  theme_light())
+#ggsave("./Results/Discretized Multivariate Distribution.jpeg", device = 'jpeg', width = 6, height=4, units = "in")
 
 }
+
 ```
 
 
@@ -385,32 +403,39 @@ createCCLHS <- function(X,n){
   small <- as.matrix(temp$sampled_data)
   return(small)
 }
-
-##collecting stats with different space filling tests
-collectStats <- function(X,sampleFun,nums,testFun1 = ks_stat_clhs_v3, testFun2 = fillTest){
-  test_res <- foreach(n = nums, .combine = rbind, 
+X=ancVals; sampleFun=createLHS; nums = nums; testFun1 = KL_stat_clhs; testFun2 = KS_stat_clhs; n=1000
+#collecting stats with different space filling tests
+collectStats <- function(X,sampleFun,nums,testFun1 = KL_stat_clhs, testFun2 = KS_stat_clhs){
+  test_res <- foreach(n = nums, .combine = rbind,
                     .packages = c("Rcpp","philentropy","foreach","clhs","data.table","dplyr","tidyr"),
                     .export = c("ancVals")) %dopar% {
                       smallSet <- sampleFun(X,n)
                       res1 <- testFun1(sample = smallSet)
-                      res2 <- testFun2(full = ancVals, small = smallSet)
-                      data.frame(Num = n,KL = res1,Fill = res2)
+                      res2 <- testFun2(sample = smallSet)
+                      #res2 <- testFun2(full = ancVals, small = smallSet)
+                    data.frame(Num = n,JD = res1, KS = res2)
                     }
   return(test_res)
 }
+
+
 ```
 
 ```{r univariate distributions examples}
-s1 <- createLHS(ancVals,2000)
-s2 <- createRandom(ancVals,400)
+s1 <- createLHS(ancVals,1000)
 plotUniDists(s1)
-plotUniDists(s2)
+# s2 <- createCCLHS(ancVals,45)
+# plotUniDists(s2)
+#s2 <- createRandom(ancVals,400)
+
+#plotUniDists(s2)
 ```
 
 
 ```{r run and plot simulations}
 
-nums <- round(seq(10, 5000, length.out = 11))
+#nums <- round(seq(10, 5000, length.out = 10))
+nums <- c(100,250, 500, 750, 1000, 1250, 1500, 1750, 2000)
 nums <- rep(nums, each = 5)
 statsRand <- collectStats(ancVals,createRandom,nums)
 statsRand$SType <- "Random"
@@ -425,9 +450,9 @@ statsAll$SType <- as.factor(statsAll$SType) %>% factor(levels = c("Random", "LHS
 
 ###Graphic of number of points needed to match variable space
 statsAll <- statsAll 
-ggplot(statsAll, aes(x = Num, y = KL, fill = SType))+
+ggplot(statsAll, aes(x = Num, y = JD, fill = SType))+
   geom_boxplot()+
-   scale_y_continuous(name = "Kullback-Leibler Divergence", limits=c(0, 8),breaks=seq(0,8,1))+
+   scale_y_continuous(name = "Jensen-Shannon Divergence", limits=c(0, 1),breaks=seq(0,1,.1))+
   #labs(x = "Number of Sample Points") +
    scale_fill_discrete(name='Sample Method', labels = c('random', 'cLHS', 'cost cLHS' ))+
   expand_limits(x = 0, y = 0)+
@@ -435,7 +460,22 @@ ggplot(statsAll, aes(x = Num, y = KL, fill = SType))+
   #xlim(0,3000)+
   theme_light()
 
-ggsave("./Results/KL_Divergence_Points_method.jpeg", device = 'jpeg', width = 6, height=4, units = "in")
+ggsave("./Results/JS_Divergence_Points_method.jpeg", device = 'jpeg', width = 6, height=4, units = "in")
+
+statsAll <- statsAll 
+ggplot(statsAll, aes(x = Num, y = KS, fill = SType))+
+  geom_boxplot()+
+   scale_y_continuous(name = "Kolmogorov-Smirnov statistic", limits=c(0, 1),breaks=seq(0,1,.1))+
+  #labs(x = "Number of Sample Points") +
+   scale_fill_discrete(name='Sample Method', labels = c('random', 'cLHS', 'cost cLHS' ))+
+  expand_limits(x = 0, y = 0)+
+  geom_hline(yintercept = 1,  linetype = "dashed", color = "red")+
+  #xlim(0,3000)+
+  theme_light()
+
+ggsave("./Results/KS_Divergence_Points_method.jpeg", device = 'jpeg', width = 6, height=4, units = "in")
+
+
 
 # 
 # ggplot(statsAll, aes(x = Num, y = Fill, fill = SType))+
@@ -601,8 +641,8 @@ statsAll2$Num <- as.factor(statsAll2$Num)
 statsAll2$SType <- as.factor(statsAll2$SType)%>% factor(levels = c("All_points", "cLHS_resample"))
 # ggplot(statsAll2, aes(x = Num, y = KL, fill = SType))+
 #   geom_boxplot()
-# ggplot(statsAll2, aes(x = Num, y = Mean, fill = SType))+
-#   geom_boxplot()
+ggplot(statsAll2, aes(x = Num, y = KS, fill = SType))+
+  geom_boxplot()
 
 ###Graphic of number of transects needed to match variable space
 ggplot(statsAll2, aes(x = Num, y = KL, fill = SType))+
