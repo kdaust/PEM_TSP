@@ -26,6 +26,7 @@ require(philentropy)
 require(ggthemes)
 require(tictoc)
 require(ggpubr)
+require(reticulate)
 #install.packages("philentropy")
 
 ```
@@ -402,22 +403,28 @@ plotUniDists <- function(sample){
   fullDat[is.na(SampNum), SampNum := 0]
   fullDat[,SampNum := SampNum/sum(SampNum)]
   fullDat[,Num := Num/sum(Num)]
-  fullDat <- melt(fullDat, id.vars = c("LHSVar","ID"))
-  require(ggsci)
-  print(ggplot(fullDat, aes(x = ID, y = value, col = variable, group = variable))+
-    geom_line(size = .5, position=position_dodge(width=5))+
-    scale_size_manual(values=c(2,2))+  
-      scale_y_continuous(name = "Bin ratio of total map area", limits=c(0, .12)) + #, ,breaks=seq(0,8,1))
-    scale_color_aaas( name='Source', labels = c('map area', 'cLHS point sample'))+
-      scale_linetype_manual(values=c("solid", "dotted"))+
-    expand_limits(x = 0, y = 0) +
-  xlab("Multivariate Bins")+
-  theme_light())
-#ggsave("./Results/Discretized Multivariate Distribution.jpeg", device = 'jpeg', width = 6, height=4, units = "in")
+  tempMat <- rbind(fullDat$Num,fullDat$SampNum)
+  kl2 <- KL(tempMat)
+
+#   require(ggsci)
+#   print(ggplot(fullDat, aes(x = ID, y = value, col = variable, group = variable))+
+#     geom_line(size = .5, position=position_dodge(width=5))+
+#     scale_size_manual(values=c(2,2))+  
+#       scale_y_continuous(name = "Bin ratio of total map area", limits=c(0, .12)) + #, ,breaks=seq(0,8,1))
+#     scale_color_aaas( name='Source', labels = c('map area', 'cLHS point sample'))+
+#       scale_linetype_manual(values=c("solid", "dotted"))+
+#     expand_limits(x = 0, y = 0) +
+#   xlab("Multivariate Bins")+
+#   theme_light())
+# #ggsave("./Results/Discretized Multivariate Distribution.jpeg", device = 'jpeg', width = 6, height=4, units = "in")
+
+
+  return(list(data = fullDat, KL = kl2))
 
 }
 
 ```
+
 
 
 ```{r sample functions single point}
@@ -463,6 +470,7 @@ collectStats <- function(X,sampleFun,nums,testFun1 = KL_stat_clhs, testFun2 = KS
 
 ```
 
+<<<<<<< HEAD
 ```{r example univariate distributions examples}
 s1 <- createLHS(ancVals,10000)
 s2 <- createLHS(ancVals, 660)
@@ -494,10 +502,91 @@ ggexport(p123, filename = "./Results/sampledistribution.jpg", width = 2000, heig
 # s2 <- createCCLHS(ancVals,45)
 # plotUniDists(s2)
 #s2 <- createRandom(ancVals,400)
-
+```
 #plotUniDists(s2)
+# =======
+# Create examples of summary distributions for manuscript
+#
+```{r univariate distributions}
+s1 <- createLHS(ancVals,100)
+s2 <- createLHS(ancVals,660)
+s3 <- createLHS(ancVals,10000)
+temp <- plotUniDists(s1)
+t1 <- temp$data
+t1[,NumSamples := 100]
+t1[,Label := paste0("100 Samples\nKL = ",round(temp$KL, digits = 3))]
+temp <- plotUniDists(s2)
+t2 <- temp$data
+t2[,NumSamples := 660]
+t2[,Label := paste0("660 Samples\nKL = ",round(temp$KL, digits = 3))]
+temp <- plotUniDists(s3)
+t3 <- temp$data
+t3[,NumSamples := 10000]
+t3[,Label := paste0(" 10000 Samples\nKL = ",round(temp$KL, digits = 3))]
+dat <- rbind(t1,t2,t3)
+dat[,Label := as.factor(Label)]
+dat[,Label := reorder(Label,NumSamples)]
+
+ggplot(dat, aes(x = ID, y = value, colour = variable, size = variable)) +
+  geom_line() +
+  facet_wrap(.~Label)+
+  theme_bw()+
+  scale_color_manual(name = "Source", values = c("red","#0634a4EE"), labels = c("Map Area","cLHS Sample")) +
+  scale_size_manual(name = "Source",values = c(1.2,0.8),labels = c("Map Area","cLHS Sample")) +
+  labs(x = "Multivariate Bins", y = "Bin ratio of total map area")
+
 ```
 
+## Test filling of real data
+
+```{r}
+s1Dat <- fread("./InputData/DeceptionFinalAllPoints_cleaned.csv")
+s1Dat <- s1Dat[,.(X,Y,ID,Site_Series_Map_Unit)]
+setnames(s1Dat, old = "Site_Series_Map_Unit", new = "Unit")
+s1Points <- st_as_sf(s1Dat,coords = c("X","Y"), crs = 3005)
+
+##All points
+sample <- ancDatVL$extract_points(s1Points)
+sample <- sample[,1:5]
+sFull1 <- plotUniDists(sample)
+##clhs sample
+colnames(sample) <- names(ancVals)
+comb <- rbind(sample, ancVals)
+newSize <- as.integer(0.9*nrow(sample))
+samp2 <- clhs(comb,size = newSize,possible.sample = 1:nrow(sample),use.cpp = T, simple = F)
+samp2 <- samp2$sampled_data
+sFull2 <- plotUniDists(samp2)
+##clhs zonal
+numPoints <- s1Dat[,.(Num = .N), by = .(Unit)]
+zonal <- s1Points[grep("01",s1Points$Unit),]
+temp <- ancDatVL$extract_points(zonal)[,1:5]
+colnames(temp) <- colnames(ancVals)
+temp <- na.omit(temp)
+size <- 334
+samp3 <- clhs(rbind(temp,ancVals),size = size, possible.sample = 1:nrow(temp),use.cpp = T, simple = F)
+samp3 <- samp3$sampled_data
+nonzonal <- s1Points[!grepl("01",s1Points$Unit),]
+temp <- ancDatVL$extract_points(nonzonal)[,1:5]
+colnames(temp) <- colnames(samp3)
+samp3 <- rbind(temp,samp3)
+sFull3 <- plotUniDists(samp3)
+
+t1 <- sFull1$data
+t1[,Label := paste0("All Data\nKL = ",round(sFull1$KL,digits = 3))]
+t2 <- sFull2$data
+t2[,Label := paste0("cLHS to 75%\nKL = ",round(sFull2$KL,digits = 3))]
+t3 <- sFull3$data
+t3[,Label := paste0("cLHS Zonal\nKL = ",round(sFull3$KL,digits = 3))]
+dat <- rbind(t1,t2,t3)
+
+ggplot(dat, aes(x = ID, y = value, colour = variable, size = variable)) +
+  geom_line() +
+  facet_wrap(.~Label)+
+  theme_bw()+
+  scale_color_manual(name = "Source", values = c("red","#0634a4EE"), labels = c("Map Area","cLHS Sample")) + 
+  scale_size_manual(name = "Source",values = c(1.2,0.8),labels = c("Map Area","cLHS Sample")) + 
+  labs(x = "Multivariate Bins", y = "Bin ratio of total map area")
+```
 
 ```{r run and plot simulations}
 
