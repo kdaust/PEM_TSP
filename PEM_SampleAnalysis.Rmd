@@ -105,20 +105,30 @@ ancDatLL <- mask(ancDatLL,becLayer)
 # LL_corr <- layerStats(ancDatLL, 'pearson', na.rm=T)
 # corr_matrixLL <- LL_corr$'pearson correlation coefficient'
 
-## stand level covariates (about 11 million r)
-SLcov <- c("twi.tif","valley_depth_2.tif","tca2.tif","swi_area_mod.tif","tpi.tif")
+## list of important stand level covariates (about 11 million r)
+#SLcov <- c("tca2.tif","swi_area_mod.tif","tpi.tif")#"twi.tif","valley_depth_2.tif",
+SLcov <- c("twi.tif","valley_depth_2.tif","open_neg.tif","swi_twi.tif","convexity.tif", "rid_level.tif", "mrvbf2.tif")
 covars <- paste(covLoc, SLcov, sep = "/")
 ancDatSL <- raster::stack(covars)
 proj4string(ancDatSL) <- "+init=epsg:3005"
 layerNamesSl <- names(ancDatSL) ##need to change this if you change the layers
 for(i in layerNamesSl){
-  ancDatSL[[i]][ancDatSL[[i]] > quantile(ancDatSL[[i]],0.9, na.rm = T)] <- NA
+  ancDatSL[[i]][ancDatSL[[i]] > quantile(ancDatSL[[i]],0.975, na.rm = T)] <- NA
 }
 
 ancVals <- as.data.table(getValues(ancDatSL))##table of SL data
 ancVals <- na.omit(ancVals)
 
-
+### test for high correlation
+# # calculate correlation matrix of variables
+  correlationMatrix <- cor(ancVals)
+# # summarize the correlation matrix
+# #print(correlationMatrix)
+# # find attributes that are highly corrected (ideally >0.75)
+  require(caret)
+  highlyCorrelated <- findCorrelation(correlationMatrix, cutoff=0.7, verbose = TRUE, names = TRUE) ## review for removal of highly correlated vars
+   highlyCorrelated
+  #X0 <- X0 %>% dplyr::select(-c(highlyCorrelated))%>% drop_na(BGC)
 # for(i in layerNamesSl){
 #   temp <- values(ancDatSL[[i]])
 #   hist1 <- hist(temp,breaks = 50, plot = F)
@@ -164,66 +174,71 @@ start <- as(start_sf, "Spatial")
 This section creates the transition layer from the slope and clost surface using Tobler's hiking function
 
 ```{r create cost surface}
+##load previously save cost rasters
+acost <- raster( "./Results/acost.tif")
+acost2<- raster ("./Results/acost2.tif")
+
+##generate new cost layer
 ##road speed
-rSpd <- fread("road_speed.csv")
-rSpd[,Values := speed]
-rdsAll <- merge(rdsAll, rSpd, by = "road_surface", all = F)
-rdsAll <- rdsAll[,"Values"] %>%
-  st_buffer(dist = 35, endCapStyle = "SQUARE", joinStyle = "MITRE") %>%
-  st_cast("MULTIPOLYGON")
-rdsRast <- fasterize(rdsAll, allRast, field = "Values")
-
-alt2 <- projectRaster(alt,rdsRast,method = 'ngb')
-altAll <- merge(rdsRast, alt2)
-altSmall <- raster::aggregate(altAll, fact = 3L, fun = min)
-
-## trasition function: if > 500, elevation, so get diff, else speed to select min
-trFn <- function(x){
-  if(x[1] > 500 & x[2] > 500){
-    x[1]-x[2]
-  }else{
-    min(x[1],x[2])
-  }
-}
-
-rdIdx <- which(values(altAll) < 100) ##which cells are for roads?
-slpIdx <- which(values(altAll) > 500)
-adj <- adjacent(altAll, cells = slpIdx, pairs = T, directions = 8)
-adj <- adj[!adj[,1] %in% rdIdx ,] ##remove roads inside area
-adj <- adj[!adj[,2] %in% rdIdx ,]
-
-tr <- transition(altAll,trFn,directions = 8, symm = F) ##altDiff and speed (km/h)
-tr1 <- geoCorrection(tr) ##divided by 25 - slope and conductance (km/h/m)
-tr1[adj] <- (3/5)*(6*exp(-3.5*abs(tr1[adj] + 0.08))) ##tobler's hiking function * 3/5 - gives km/h
-tr1 <- tr1*1000 ##now roads are correct conductance (h/m), and walking in m/h
-tr2 <- geoCorrection(tr1) ##have to geocorrect this part again
-tr1[adj] <- tr2[adj] ##tr1 values are now all conductance in h/metre
-
-acost <- accCost(tr1,start)
-plot(acost)
-
-##create smaller version for TSP
-rdIdx <- which(values(altSmall) < 100) ##which cells are for roads?
-slpIdx <- which(values(altSmall) > 500)
-adj <- adjacent(altSmall, cells = slpIdx, pairs = T, directions = 8)
-adj <- adj[!adj[,1] %in% rdIdx ,] ##remove roads inside area
-adj <- adj[!adj[,2] %in% rdIdx ,]
-
-tr <- transition(altSmall,trFn,directions = 8, symm = F) ##altDiff and speed (km/h)
-trSmall <- geoCorrection(tr) ##divided by 25 - slope and conductance (km/h/m)
-trSmall[adj] <- (3/5)*(6*exp(-3.5*abs(tr1[adj] + 0.08))) ##tobler's hiking function * 3/5 - gives km/h
-trSmall <- trSmall*1000 ##now roads are correct conductance (h/m), and walking in m/h
-tr2 <- geoCorrection(trSmall) ##have to geocorrect this part again
-trSmall[adj] <- tr2[adj] ##tr1 values are now all conductance in h/metre
-
-acost2 <- projectRaster(acost, ancDatSL)
-acost2 <- mask(acost2, alt)
-#acost2 <- mask(acost2, becLayer)
-ancDatSL_cost <- stack(ancDatSL,acost2)
-
-plot(acost2)
-writeRaster(acost, "./Results/acost.tif", format = "GTiff", overwrite = TRUE)
-writeRaster(acost2, "./Results/acost2.tif", format = "GTiff", overwrite = TRUE)
+# rSpd <- fread("road_speed.csv")
+# rSpd[,Values := speed]
+# rdsAll <- merge(rdsAll, rSpd, by = "road_surface", all = F)
+# rdsAll <- rdsAll[,"Values"] %>%
+#   st_buffer(dist = 35, endCapStyle = "SQUARE", joinStyle = "MITRE") %>%
+#   st_cast("MULTIPOLYGON")
+# rdsRast <- fasterize(rdsAll, allRast, field = "Values")
+# 
+# alt2 <- projectRaster(alt,rdsRast,method = 'ngb')
+# altAll <- merge(rdsRast, alt2)
+# altSmall <- raster::aggregate(altAll, fact = 3L, fun = min)
+# 
+# ## trasition function: if > 500, elevation, so get diff, else speed to select min
+# trFn <- function(x){
+#   if(x[1] > 500 & x[2] > 500){
+#     x[1]-x[2]
+#   }else{
+#     min(x[1],x[2])
+#   }
+# }
+# 
+# rdIdx <- which(values(altAll) < 100) ##which cells are for roads?
+# slpIdx <- which(values(altAll) > 500)
+# adj <- adjacent(altAll, cells = slpIdx, pairs = T, directions = 8)
+# adj <- adj[!adj[,1] %in% rdIdx ,] ##remove roads inside area
+# adj <- adj[!adj[,2] %in% rdIdx ,]
+# 
+# tr <- transition(altAll,trFn,directions = 8, symm = F) ##altDiff and speed (km/h)
+# tr1 <- geoCorrection(tr) ##divided by 25 - slope and conductance (km/h/m)
+# tr1[adj] <- (3/5)*(6*exp(-3.5*abs(tr1[adj] + 0.08))) ##tobler's hiking function * 3/5 - gives km/h
+# tr1 <- tr1*1000 ##now roads are correct conductance (h/m), and walking in m/h
+# tr2 <- geoCorrection(tr1) ##have to geocorrect this part again
+# tr1[adj] <- tr2[adj] ##tr1 values are now all conductance in h/metre
+# 
+# acost <- accCost(tr1,start)
+# plot(acost)
+# 
+# ##create smaller version for TSP
+# rdIdx <- which(values(altSmall) < 100) ##which cells are for roads?
+# slpIdx <- which(values(altSmall) > 500)
+# adj <- adjacent(altSmall, cells = slpIdx, pairs = T, directions = 8)
+# adj <- adj[!adj[,1] %in% rdIdx ,] ##remove roads inside area
+# adj <- adj[!adj[,2] %in% rdIdx ,]
+# 
+# tr <- transition(altSmall,trFn,directions = 8, symm = F) ##altDiff and speed (km/h)
+# trSmall <- geoCorrection(tr) ##divided by 25 - slope and conductance (km/h/m)
+# trSmall[adj] <- (3/5)*(6*exp(-3.5*abs(tr1[adj] + 0.08))) ##tobler's hiking function * 3/5 - gives km/h
+# trSmall <- trSmall*1000 ##now roads are correct conductance (h/m), and walking in m/h
+# tr2 <- geoCorrection(trSmall) ##have to geocorrect this part again
+# trSmall[adj] <- tr2[adj] ##tr1 values are now all conductance in h/metre
+# 
+# acost2 <- projectRaster(acost, ancDatSL)
+# acost2 <- mask(acost2, alt)
+# #acost2 <- mask(acost2, becLayer)
+# ancDatSL_cost <- stack(ancDatSL,acost2)
+# 
+# plot(acost2)
+# writeRaster(acost, "./Results/acost.tif", format = "GTiff", overwrite = TRUE)
+# writeRaster(acost2, "./Results/acost2.tif", format = "GTiff", overwrite = TRUE)
 # png('./outputs/acost2.png', height=nrow(acost2), width=ncol(acost2)) 
 # plot(acost2, maxpixels=ncell(acost2))
 # dev.off()
@@ -236,12 +251,12 @@ For all the following simulations we're testing with random samples, LHS samples
 There are different ways of testing space filling: in the below code, we use KS statistics, a simple bin fill function
 
 ```{r setup distribtuion and test functions}
-ancDatSL <- raster::stack(covars)
-proj4string(ancDatSL) <- "+init=epsg:3005"
-layerNamesSl <- names(ancDatSL) ##need to change this if you change the layers
-for(i in layerNamesSl){
-  ancDatSL[[i]][ancDatSL[[i]] > quantile(ancDatSL[[i]],0.9, na.rm = T)] <- NA
-}
+# ancDatSL <- raster::stack(covars)
+# proj4string(ancDatSL) <- "+init=epsg:3005"
+# layerNamesSl <- names(ancDatSL) ##need to change this if you change the layers
+# for(i in layerNamesSl){
+#   ancDatSL[[i]][ancDatSL[[i]] > quantile(ancDatSL[[i]],0.9, na.rm = T)] <- NA
+# }
 tempID <- ancDatSL$twi
 tempID[] <- 1:(nrow(tempID)*ncol(tempID))
 names(tempID) <- "CellID"
