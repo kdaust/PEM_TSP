@@ -106,6 +106,9 @@ ancDatLL <- mask(ancDatLL,becLayer)
 
 ## list of important stand level covariates (about 11 million r)
 #SLcov <- c("tca2.tif","swi_area_mod.tif","tpi.tif")#"twi.tif","valley_depth_2.tif",
+
+##SLcov <- c("twi.tif","valley_depth_2.tif","tca2.tif","swi_area_mod.tif","tpi.tif")
+
 SLcov <- c("twi.tif","valley_depth_2.tif","open_neg.tif","swi_twi.tif","convexity.tif", "rid_level.tif", "mrvbf2.tif")
 covars <- paste(covLoc, SLcov, sep = "/")
 ancDatSL <- raster::stack(covars)
@@ -176,6 +179,8 @@ This section creates the transition layer from the slope and clost surface using
 ##load previously save cost rasters
 acost <- raster( "./Results/acost.tif")
 acost2<- raster ("./Results/acost2.tif")
+ancDatSL_cost <- stack(ancDatSL,acost2)
+
 
 ##generate new cost layer
 ##road speed
