@@ -27,7 +27,6 @@ require(ggthemes)
 require(tictoc)
 require(ggpubr)
 require(reticulate)
-#install.packages("philentropy")
 
 ```
 
@@ -424,7 +423,7 @@ plotUniDists <- function(sample){
 #   require(ggsci)
 #   print(ggplot(fullDat, aes(x = ID, y = value, col = variable, group = variable))+
 #     geom_line(size = .5, position=position_dodge(width=5))+
-#     scale_size_manual(values=c(2,2))+  
+#     scale_size_manual(values=c(2,2))+
 #       scale_y_continuous(name = "Bin ratio of total map area", limits=c(0, .12)) + #, ,breaks=seq(0,8,1))
 #     scale_color_aaas( name='Source', labels = c('map area', 'cLHS point sample'))+
 #       scale_linetype_manual(values=c("solid", "dotted"))+
@@ -485,41 +484,40 @@ collectStats <- function(X,sampleFun,nums,testFun1 = KL_stat_clhs, testFun2 = KS
 
 ```
 
-<<<<<<< HEAD
+
 ```{r example univariate distributions examples}
-s1 <- createLHS(ancVals,10000)
-s2 <- createLHS(ancVals, 660)
-s3 <- createLHS(ancVals, 100)
-p1 <- plotUniDists(s1)
-p2 <- plotUniDists(s2)
-p3 <- plotUniDists(s3)
-s1stats <- collectStats(ancVals,createLHS, 10000) %>% select(KL, KS) %>% as.numeric() %>% round(3)
-s1.kl.lab <- paste("KL divergence = ", s1stats[1])
-s1.ks.lab <- paste("KS = ", s1stats[2])
-s1.lab <- paste("10000 samples", s1.kl.lab, s1.ks.lab, sep="\n")
-s2stats <- collectStats(ancVals,createLHS, 600) %>% select(KL, KS) %>% as.numeric() %>% round(3)
-s2.kl.lab <- paste("KL divergence = ", s2stats[1])
-s2.ks.lab <- paste("KS = ", s2stats[2])
-s2.lab <- paste("660 samples", s2.kl.lab, s2.ks.lab, sep="\n")
-s3stats <- collectStats(ancVals,createLHS, 100) %>% select(KL, KS) %>% as.numeric() %>% round(3)
-s3.kl.lab <- paste("KL divergence = ", s3stats[1])
-s3.ks.lab <- paste("KS = ", s3stats[2])
-s3.lab <- paste("100 samples", s3.kl.lab, s3.ks.lab, sep="\n")
-#statsLHS$SType <- "LHS"
-
-p123 <- ggarrange(p3, p2, p1, ncol = 3, labels = c(s3.lab, s2.lab, s1.lab), widths = c(4, 4, 4),
-                  label.x = 0.14, label.y = .99,
-                  font.label = list(size = 8, color = "black", face = "bold", family = NULL),
-          common.legend = TRUE, legend = "bottom") # Second row with box and dot plots
-
-plot(p123)
-ggexport(p123, filename = "./Results/sampledistribution.jpg", width = 2000, height = 1000,res = 300)
+# s1 <- createLHS(ancVals,10000)
+# s2 <- createLHS(ancVals, 660)
+# s3 <- createLHS(ancVals, 100)
+# p1 <- plotUniDists(s1)
+# p2 <- plotUniDists(s2)
+# p3 <- plotUniDists(s3)
+# s1stats <- collectStats(ancVals,createLHS, 10000) %>% select(KL, KS) %>% as.numeric() %>% round(3)
+# s1.kl.lab <- paste("KL divergence = ", s1stats[1])
+# s1.ks.lab <- paste("KS = ", s1stats[2])
+# s1.lab <- paste("10000 samples", s1.kl.lab, s1.ks.lab, sep="\n")
+# s2stats <- collectStats(ancVals,createLHS, 600) %>% select(KL, KS) %>% as.numeric() %>% round(3)
+# s2.kl.lab <- paste("KL divergence = ", s2stats[1])
+# s2.ks.lab <- paste("KS = ", s2stats[2])
+# s2.lab <- paste("660 samples", s2.kl.lab, s2.ks.lab, sep="\n")
+# s3stats <- collectStats(ancVals,createLHS, 100) %>% select(KL, KS) %>% as.numeric() %>% round(3)
+# s3.kl.lab <- paste("KL divergence = ", s3stats[1])
+# s3.ks.lab <- paste("KS = ", s3stats[2])
+# s3.lab <- paste("100 samples", s3.kl.lab, s3.ks.lab, sep="\n")
+# #statsLHS$SType <- "LHS"
+# library(ggpubr)
+# p123 <- ggarrange(p3, p2, p1, ncol = 3, labels = c(s3.lab, s2.lab, s1.lab), widths = c(4, 4, 4),
+#                   label.x = 0.14, label.y = .99,
+#                   font.label = list(size = 8, color = "black", face = "bold", family = NULL),
+#           common.legend = TRUE, legend = "bottom") # Second row with box and dot plots
+# 
+# plot(p123)
+##ggexport(p123, filename = "./Results/sampledistribution.jpg", width = 2000, height = 1000,res = 300)
 # s2 <- createCCLHS(ancVals,45)
 # plotUniDists(s2)
 #s2 <- createRandom(ancVals,400)
 ```
-#plotUniDists(s2)
-# =======
+
 # Create examples of summary distributions for manuscript
 #
 ```{r univariate distributions}
@@ -542,7 +540,8 @@ dat <- rbind(t1,t2,t3)
 dat[,Label := as.factor(Label)]
 dat[,Label := reorder(Label,NumSamples)]
 
-ggplot(dat, aes(x = ID, y = value, colour = variable, size = variable)) +
+dat2 <- melt(dat, id.vars = c("Label","ID"), measure.vars = c("Num","SampNum"))
+ggplot(dat2, aes(x = ID, y = value, colour = variable, size = variable)) +
   geom_line() +
   facet_wrap(.~Label)+
   theme_bw()+
@@ -568,7 +567,7 @@ sFull1 <- plotUniDists(sample)
 colnames(sample) <- names(ancVals)
 comb <- rbind(sample, ancVals)
 newSize <- as.integer(0.9*nrow(sample))
-samp2 <- clhs(comb,size = newSize,possible.sample = 1:nrow(sample),use.cpp = T, simple = F)
+samp2 <- clhs(comb,size = newSize,can.include = 1:nrow(sample),use.cpp = T, simple = F)
 samp2 <- samp2$sampled_data
 sFull2 <- plotUniDists(samp2)
 ##clhs zonal
@@ -578,7 +577,7 @@ temp <- ancDatVL$extract_points(zonal)[,1:5]
 colnames(temp) <- colnames(ancVals)
 temp <- na.omit(temp)
 size <- 334
-samp3 <- clhs(rbind(temp,ancVals),size = size, possible.sample = 1:nrow(temp),use.cpp = T, simple = F)
+samp3 <- clhs(rbind(temp,ancVals),size = size, can.include = 1:nrow(temp),use.cpp = T, simple = F)
 samp3 <- samp3$sampled_data
 nonzonal <- s1Points[!grepl("01",s1Points$Unit),]
 temp <- ancDatVL$extract_points(nonzonal)[,1:5]
@@ -593,8 +592,9 @@ t2[,Label := paste0("cLHS to 75%\nKL = ",round(sFull2$KL,digits = 3))]
 t3 <- sFull3$data
 t3[,Label := paste0("cLHS Zonal\nKL = ",round(sFull3$KL,digits = 3))]
 dat <- rbind(t1,t2,t3)
+dat2 <- melt(dat, id.vars = c("Label","ID"), measure.vars = c("Num","SampNum"))
 
-ggplot(dat, aes(x = ID, y = value, colour = variable, size = variable)) +
+ggplot(dat2, aes(x = ID, y = value, colour = variable, size = variable)) +
   geom_line() +
   facet_wrap(.~Label)+
   theme_bw()+
@@ -714,7 +714,7 @@ Xcost <- Xcost[!is.infinite(Xcost$layer),]
 ###create LHS transect sample, use clhs to sample transects
 createLHS <- function(X,n){ ## X = landscape covariates and n = number of transects
   xMat <- st_drop_geometry(X)
-  temp <- clhs(xMat,size = n,cost = NULL,iter = 10000,use.cpp = T,simple = F)
+  temp <- clhs(xMat,size = n,cost = NULL,iter = 5000,use.cpp = T,simple = F)
   dat <- X[temp$index_samples,]
   small <- foreach(j = 1:nrow(dat),.combine = c) %do% {
     tri <- Tri_build(id = j, x = st_coordinates(dat[j,])[1],y = st_coordinates(dat[j,])[2])
@@ -731,7 +731,7 @@ createLHS <- function(X,n){ ## X = landscape covariates and n = number of transe
 ##create cclhs sample, extract points @ 5m intervals
 createCCLHS_30m <- function(X,n){
   xMat <- st_drop_geometry(X)
-  temp <- clhs(xMat,size = n,cost = ncol(xMat),iter = 10000,use.cpp = T,simple = F)
+  temp <- clhs(xMat,size = n,cost = ncol(xMat),iter = 5000,use.cpp = T,simple = F)
   dat <- X[temp$index_samples,]
   small <- foreach(j = 1:nrow(dat),.combine = rbind) %do% {
     tri <- Tri_build(id = j, x = st_coordinates(dat[j,])[1],y = st_coordinates(dat[j,])[2])
@@ -752,7 +752,7 @@ createCCLHS_30m <- function(X,n){
 ##create cclhs transects, sample using lhs
 createCCLHS <- function(X,n){
   xMat <- st_drop_geometry(X)
-  temp <- clhs(xMat,size = n,cost = ncol(xMat),iter = 10000,use.cpp = T,simple = F)
+  temp <- clhs(xMat,size = n,cost = ncol(xMat),iter = 5000,use.cpp = T,simple = F)
   dat <- X[temp$index_samples,]
   small <- foreach(j = 1:nrow(dat),.combine = c) %do% {
     tri <- Tri_build(id = j, x = st_coordinates(dat[j,])[1],y = st_coordinates(dat[j,])[2])
@@ -761,13 +761,13 @@ createCCLHS <- function(X,n){
   }
   idxs <- which(idVals %in% small)
   nPoints <- as.integer(length(idxs)*0.85)
-  sl_lhs <- clhs(ancVals, size = nPoints,possible.sample = idxs,iter = 10000,use.cpp = T,simple = F)
+  sl_lhs <- clhs(ancVals, size = nPoints,can.include = idxs,iter = 5000,use.cpp = T,simple = F)
   temp <- sl_lhs$sampled_data
   return(temp)
 }
 
 ##function to run simulations
-collectStats <- function(X,sampleFun, nums, testFun1 = ks_stat_clhs_v3,testFun2 = ks_stat_clhs_v4){
+collectStats <- function(X,sampleFun, nums, testFun1 = KL_stat_clhs,testFun2 = KS_stat_clhs){
   pkgs <- c("Rcpp","philentropy", "foreach","sf",
           "raster","LearnGeom","dplyr","reticulate","gdistance","scales","velox","clhs","data.table","tidyr")
   test_res <- foreach(n = nums, .combine = rbind, .packages = pkgs,
@@ -812,7 +812,7 @@ statsAll2$Num <- as.factor(statsAll2$Num)
 statsAll2$SType <- as.factor(statsAll2$SType)%>% factor(levels = c("All_points", "cLHS_resample"))
 # ggplot(statsAll2, aes(x = Num, y = KL, fill = SType))+
 #   geom_boxplot()
-ggplot(statsAll2, aes(x = Num, y = KS, fill = SType))+
+ggplot(statsAll2, aes(x = Num, y = KL, fill = SType))+
   geom_boxplot()
 
 ###Graphic of number of transects needed to match variable space
@@ -925,15 +925,15 @@ calcCost <- function(Xcost,n,nTry){
   return(tspTime)
 }
 
-nums <- seq(2,40,by = 5)
-tspTest <- foreach(numRep = nums, .combine = rbind) %do% {
-  dat <- calcCost(Xcost, n = 30, nTry = numRep)
-  dat[,NumRep := numRep]
-  dat
-}
-
-tspSum <- tspTest[,.(MinTime = min(Cost)), by = .(NumRep)]
-knitr::kable(tspSum)
+# nums <- seq(2,40,by = 5)
+# tspTest <- foreach(numRep = nums, .combine = rbind) %do% {
+#   dat <- calcCost(Xcost, n = 30, nTry = numRep)
+#   dat[,NumRep := numRep]
+#   dat
+# }
+# 
+# tspSum <- tspTest[,.(MinTime = min(Cost)), by = .(NumRep)]
+# knitr::kable(tspSum)
 ```
 
 ## Simulation 3: Sampling Time
@@ -1018,7 +1018,7 @@ collectTime <- function(X,sampleFun, num){
 }
 
 trans <- as.integer(c(5, 10, 15, 20, 25, 30, 35, 40, 45, 50)) ##numbers of transects
-trans <- rep(trans,each = 10) ##replications at each level
+trans <- rep(trans,each = 5) ##replications at each level
 
 LHSTime <- collectTime(X,timeLHS,num = trans)
 LHSTime$Type = "LHS"
@@ -1077,8 +1077,9 @@ calcCost_tsp <- function(Xcost,n,nTry){
 # trans <- as.integer(c(5, 10, 15, 20, 25, 30, 35, 40, 45, 50)) ##numbers of transects
 # trans <- rep(trans,each = 5) ##replications at each level
 
+#this part takes a while
 TSPTime <- foreach(n = trans,.combine = rbind) %do% {
-  time <- calcCost_tsp(Xcost,n,15)
+  time <- calcCost_tsp(Xcost,n,8)
   data.frame(Num = n, Cost = time)
 }
 TSPTime$Type <- "TSP"
@@ -1240,7 +1241,7 @@ pkgs <- c("Rcpp","LaplacesDemon", "foreach","sf",
 SPoint <- foreach(n = 1:(nSims*nRep), .combine = rbind, .packages = pkgs,
                   .export = c("start_sf","trSmall", "calcCost_clhs","allSLDat")) %dopar% { #
                     reticulate::source_python("mTSP.py")
-                    templhs <- clhs(allSLDat,size = as.integer(numNeeded/4),cost = ncol(allSLDat),use.cpp = T, iter = 6000,simple = F)#6000
+                    templhs <- clhs(allSLDat,size = as.integer(numNeeded/4),cost = ncol(allSLDat),use.cpp = T, iter = 5000,simple = F)#6000
                     tempdat <- templhs$sampled_data
                     cellNums <- as.numeric(rownames(tempdat))
                     dat <- raster::xyFromCell(ancDatSL_cost,cell = cellNums, sp = T)
@@ -1290,9 +1291,8 @@ timeAll[,SType := reorder(SType,Cost, FUN = function(x){-mean(x)})]
 
 ggplot(timeAll, aes(x = SType, y = Cost))+
   geom_boxplot()+
-    scale_y_continuous(name = "Number of 8-hour days", limits=c(0, 30),breaks=seq(0,30,10))+
+    scale_y_continuous(name = "Number of 8-hour days")+
   labs(x = "Number of Sample Sites in Sample Plan") +
-  expand_limits(x = 0, y = 0)+
   scale_fill_discrete (name= 'Method', labels = c('cLHS', 'cost-constrained cLHS',  'Travelling Salesman Optimized')) +
   theme_light()
 ggsave("./Results/CostsTransectvsPointsMethod.jpeg", device = 'jpeg', width = 4, height = 4)
