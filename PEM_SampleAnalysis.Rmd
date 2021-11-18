@@ -27,6 +27,9 @@ require(ggthemes)
 require(tictoc)
 require(ggpubr)
 require(reticulate)
+require(flextable)
+require(vsgoftest)
+#install.packages("vsgoftest")
 
 ```
 
@@ -153,10 +156,11 @@ ancVals <- na.omit(ancVals)
 # All_corr <- layerStats(ancDatALL, 'pearson', na.rm=T)
 # corr_matrixAll <- All_corr$'pearson correlation coefficient'
 
-## dem for transtion layer
-alt <- raster(paste0(covLoc, "/dem.tif"))
+## dem for transtion layer should be 25m?
+alt <- raster(paste0(covLoc, "/dem.tif")) 
 proj4string(alt) <- "+init=epsg:3005"
-
+altLL <- raster(paste0(covLoc, "/DEM25m.tif"))
+proj4string(altLL) <- "+init=epsg:3005"
 ## template raster
 allRast <- raster(paste0(covLoc,"/Road_Rast_Small.tif"))    
 allRast[allRast == 255] <- NA
@@ -179,11 +183,12 @@ This section creates the transition layer from the slope and clost surface using
 ##load previously save cost rasters
 acost <- raster( "./Results/acost.tif")
 acost2<- raster ("./Results/acost2.tif")
+acostLL <- raster("./Results/acostLL.tif")
 ancDatSL_cost <- stack(ancDatSL,acost2)
+ancDatLL_cost <- stack(ancDatLL,acostLL)
 
-
-##generate new cost layer
-##road speed
+# ##generate new cost layer
+# ##road speed
 # rSpd <- fread("road_speed.csv")
 # rSpd[,Values := speed]
 # rdsAll <- merge(rdsAll, rSpd, by = "road_surface", all = F)
@@ -237,13 +242,15 @@ ancDatSL_cost <- stack(ancDatSL,acost2)
 # 
 # acost2 <- projectRaster(acost, ancDatSL)
 # acost2 <- mask(acost2, alt)
-# #acost2 <- mask(acost2, becLayer)
-# ancDatSL_cost <- stack(ancDatSL,acost2)
+# acostLL <- projectRaster(acost, ancDatLL)
+# acostLL  <- mask(acostLL, altLL)
+# #ancDatSL_cost <- stack(ancDatSL,acost2)
 # 
 # plot(acost2)
 # writeRaster(acost, "./Results/acost.tif", format = "GTiff", overwrite = TRUE)
 # writeRaster(acost2, "./Results/acost2.tif", format = "GTiff", overwrite = TRUE)
-# png('./outputs/acost2.png', height=nrow(acost2), width=ncol(acost2)) 
+# writeRaster(acostLL, "./Results/acostLL.tif", format = "GTiff", overwrite = TRUE)
+# png('./outputs/acost2.png', height=nrow(acost2), width=ncol(acost2))
 # plot(acost2, maxpixels=ncell(acost2))
 # dev.off()
 
@@ -311,7 +318,7 @@ KL_stat_clhs <- function(sample){
   temp <- t(tempMat)# %>% dplyr::select()
   ks2 <- ks.test(temp[,1], temp[,2], alternative = "g")
   ks2p <- ks2$p.value## returns KS statistic and p value
-  return(kl2)#kl2, ,ks2p js2, js2, ks2$statistic))
+  return(kl2, ks2p, js2, js2, ks2$statistic)
 }
 
 # #sample = s3
@@ -450,8 +457,8 @@ plotUniDists <- function(sample){
 ##single points clhs sampled
 allSLDat <- as.data.frame(getValues(ancDatSL_cost))##table of SL data
 #allSLDat[,CellID := seq_along(allSLDat$twi)]
-allSLDat <- na.omit(allSLDat)
-allSLDat <- allSLDat[!is.infinite(allSLDat$layer),]
+allSLDat <- na.omit(allSLDat) %>% as.data.frame
+#allSLDat <- allSLDat[!is.infinite(allSLDat$layer),] ## this line was leading to no observations
 
 
 ##functions to create sampling setups
@@ -527,91 +534,161 @@ collectStats <- function(X,sampleFun,nums,testFun1 = KL_stat_clhs, testFun2 = KS
 #
 ```{r univariate distributions}
 s1 <- createLHS(ancVals,100)
-s2 <- createLHS(ancVals,660)
-s3 <- createLHS(ancVals,10000)
+s2 <- createLHS(ancVals,500)
+s3 <- createLHS(ancVals,2500)
+s4 <- createLHS(ancVals,5000)
+
 temp <- plotUniDists(s1)
 t1 <- temp$data
 t1[,NumSamples := 100]
 t1[,Label := paste0("100 Samples\nKL = ",round(temp$KL, digits = 3))]
 temp <- plotUniDists(s2)
 t2 <- temp$data
-t2[,NumSamples := 660]
-t2[,Label := paste0("660 Samples\nKL = ",round(temp$KL, digits = 3))]
+t2[,NumSamples := 500]
+t2[,Label := paste0("500 Samples\nKL = ",round(temp$KL, digits = 3))]
 temp <- plotUniDists(s3)
 t3 <- temp$data
-t3[,NumSamples := 10000]
-t3[,Label := paste0(" 10000 Samples\nKL = ",round(temp$KL, digits = 3))]
-dat <- rbind(t1,t2,t3)
+t3[,NumSamples := 2500]
+t3[,Label := paste0(" 2500 Samples\nKL = ",round(temp$KL, digits = 3))]
+temp <- plotUniDists(s4)
+t4 <- temp$data
+t4[,NumSamples := 5000]
+t4[,Label := paste0(" 5000 Samples\nKL = ",round(temp$KL, digits = 3))]
+dat <- rbind(t1,t2,t3,t4)
 dat[,Label := as.factor(Label)]
 dat[,Label := reorder(Label,NumSamples)]
 
 dat2 <- melt(dat, id.vars = c("Label","ID"), measure.vars = c("Num","SampNum"))
-ggplot(dat2, aes(x = ID, y = value, colour = variable, size = variable)) +
+source("./_functions/doc_theme_pem.r")
+fillspace <- ggplot(dat2, aes(x = ID, y = value, colour = variable, size = variable)) +
   geom_line() +
   facet_wrap(.~Label)+
-  theme_bw()+
-  scale_color_manual(name = "Source", values = c("red","#0634a4EE"), labels = c("Map Area","cLHS Sample")) +
-  scale_size_manual(name = "Source",values = c(1.2,0.8),labels = c("Map Area","cLHS Sample")) +
+  theme_pem_facet()+
+  scale_color_manual(name = "Source", values = c("black","grey"), labels = c("Map Area","cLHS Sample")) +
+  scale_size_manual(name = "Source",values = c(3.2,0.8),labels = c("Actual Distribution","cLHS Sample")) +
+  scale_alpha(range = c(0.4, 0.8))+
   labs(x = "Multivariate Bins", y = "Bin ratio of total map area")
+fillspace
+  finalise_plot (fillspace, "./figures/samplestofillbins.png",
+                          width_pixels=640,
+                          height_pixels=450)
+dev.off()
+
+
 
 ```
 
-## Test filling of real data
+## Test filling of real data. Add by slice
 
 ```{r}
-s1Dat <- fread("./InputData/DeceptionFinalAllPoints_cleaned.csv")
-s1Dat <- s1Dat[,.(X,Y,ID,Site_Series_Map_Unit)]
-setnames(s1Dat, old = "Site_Series_Map_Unit", new = "Unit")
-s1Points <- st_as_sf(s1Dat,coords = c("X","Y"), crs = 3005)
+# s1Dat <- fread("./InputData/DeceptionFinalAllPoints_cleaned.csv")
+# s1Dat <- s1Dat[,.(X,Y,ID,Site_Series_Map_Unit)]
+# setnames(s1Dat, old = "Site_Series_Map_Unit", new = "Unit")
+# s1Points <- st_as_sf(s1Dat,coords = c("X","Y"), crs = 3005)
+
+s1Dat <- fread("./InputData/s1_clean_pts_all_fnf.csv")
+s1Dat <- s1Dat[,.(x,y,ID,mapunit1, slice)]
+setnames(s1Dat, old = "mapunit1", new = "Unit")
+s1Points <- st_as_sf(s1Dat,coords = c("x","y"), crs = 3005)
 
 ##All points
 sample <- ancDatVL$extract_points(s1Points)
-sample <- sample[,1:5]
+sample <- sample[,1:7]
 sFull1 <- plotUniDists(sample)
+
+## Single slice
+slices = c("1")
+sample1 <- s1Points %>% filter(slice %in% slices)
+sample1 <- ancDatVL$extract_points(sample1)
+sample1 <- sample1[,1:7]
+sSlice1 <- plotUniDists(sample1)
+
+## 2 slice
+slices = c("1", "2")
+sample1 <- s1Points %>% filter(slice %in% slices)
+sample1 <- ancDatVL$extract_points(sample1)
+sample1 <- sample1[,1:7]
+sSlice2 <- plotUniDists(sample1)
+## 3 slice
+slices = c("1", "2", "3")
+sample1 <- s1Points %>% filter(slice %in% slices)
+sample1 <- ancDatVL$extract_points(sample1)
+sample1 <- sample1[,1:7]
+sSlice3 <- plotUniDists(sample1)
+## 4 slice
+slices = c("1", "2", "3", "4")
+sample1 <- s1Points %>% filter(slice %in% slices)
+sample1 <- ancDatVL$extract_points(sample1)
+sample1 <- sample1[,1:7]
+sSlice4 <- plotUniDists(sample1)
+
 ##clhs sample
-colnames(sample) <- names(ancVals)
-comb <- rbind(sample, ancVals)
-newSize <- as.integer(0.9*nrow(sample))
-samp2 <- clhs(comb,size = newSize,can.include = 1:nrow(sample),use.cpp = T, simple = F)
-samp2 <- samp2$sampled_data
-sFull2 <- plotUniDists(samp2)
-##clhs zonal
-numPoints <- s1Dat[,.(Num = .N), by = .(Unit)]
-zonal <- s1Points[grep("01",s1Points$Unit),]
-temp <- ancDatVL$extract_points(zonal)[,1:5]
-colnames(temp) <- colnames(ancVals)
-temp <- na.omit(temp)
-size <- 334
-samp3 <- clhs(rbind(temp,ancVals),size = size, can.include = 1:nrow(temp),use.cpp = T, simple = F)
-samp3 <- samp3$sampled_data
-nonzonal <- s1Points[!grepl("01",s1Points$Unit),]
-temp <- ancDatVL$extract_points(nonzonal)[,1:5]
-colnames(temp) <- colnames(samp3)
-samp3 <- rbind(temp,samp3)
-sFull3 <- plotUniDists(samp3)
+# colnames(sample) <- names(ancVals)
+# comb <- rbind(sample, ancVals)
+# newSize <- as.integer(0.9*nrow(sample))
+# samp2 <- clhs(comb,size = newSize,can.include = 1:nrow(sample),use.cpp = T, simple = F)
+# samp2 <- samp2$sampled_data
+# sFull2 <- plotUniDists(samp2)
+# ##clhs zonal
+# numPoints <- s1Dat[,.(Num = .N), by = .(Unit)]
+# zonal <- s1Points[grep("01",s1Points$Unit),]
+# temp <- ancDatVL$extract_points(zonal)[,1:7]
+# colnames(temp) <- colnames(ancVals)
+# temp <- na.omit(temp)
+# size <- 334
+# samp3 <- clhs(rbind(temp,ancVals),size = size, can.include = 1:nrow(temp),use.cpp = T, simple = F)
+# samp3 <- samp3$sampled_data
+# nonzonal <- s1Points[!grepl("01",s1Points$Unit),]
+# temp <- ancDatVL$extract_points(nonzonal)[,1:7]
+# colnames(temp) <- colnames(samp3)
+# samp3 <- rbind(temp,samp3)
+# sFull3 <- plotUniDists(samp3)
 
 t1 <- sFull1$data
 t1[,Label := paste0("All Data\nKL = ",round(sFull1$KL,digits = 3))]
-t2 <- sFull2$data
-t2[,Label := paste0("cLHS to 75%\nKL = ",round(sFull2$KL,digits = 3))]
-t3 <- sFull3$data
-t3[,Label := paste0("cLHS Zonal\nKL = ",round(sFull3$KL,digits = 3))]
-dat <- rbind(t1,t2,t3)
+# t2 <- sFull2$data
+# t2[,Label := paste0("cLHS to 75%\nKL = ",round(sFull2$KL,digits = 3))]
+# t3 <- sFull3$data
+# t3[,Label := paste0("cLHS Zonal\nKL = ",round(sFull3$KL,digits = 3))]
+# dat <- rbind(t1,t2,t3)
+
+s1 <- sSlice1$data
+s1[,Label := paste0("1 Slice\nKL = ",round(sSlice1$KL,digits = 3))]
+
+s2 <- sSlice2$data
+s2[,Label := paste0("2 Slice\nKL = ",round(sSlice2$KL,digits = 3))] 
+dat <- rbind(t1,s1,s2)
+
+
+s3 <- sSlice3$data
+s3[,Label := paste0("3 Slice\nKL = ",round(sSlice3$KL,digits = 3))]
+
+s4 <- sSlice4$data
+s4[,Label := paste0("4 Slice\nKL = ",round(sSlice4$KL,digits = 3))] 
+
+dat <- rbind(t1,s1,s2,s3, s4)
+
 dat2 <- melt(dat, id.vars = c("Label","ID"), measure.vars = c("Num","SampNum"))
 
-ggplot(dat2, aes(x = ID, y = value, colour = variable, size = variable)) +
+samplespace <- ggplot(dat2, aes(x = ID, y = value, colour = variable, size = variable)) +
   geom_line() +
   facet_wrap(.~Label)+
-  theme_bw()+
-  scale_color_manual(name = "Source", values = c("red","#0634a4EE"), labels = c("Map Area","cLHS Sample")) + 
-  scale_size_manual(name = "Source",values = c(1.2,0.8),labels = c("Map Area","cLHS Sample")) + 
+  theme_pem_facet()+
+  scale_color_manual(name = "Source", values = c("black","grey"), labels = c("Map Area","cLHS Sample")) +
+  scale_size_manual(name = "Source",values = c(3.2,0.8),labels = c("Actual Distribution","cLHS Sample")) +
+  scale_alpha(range = c(0.4, 0.8))+
   labs(x = "Multivariate Bins", y = "Bin ratio of total map area")
+samplespace
+  finalise_plot (samplespace, "./figures/slicestofillbins.png",
+                          width_pixels=640,
+                          height_pixels=450)
+#dev.off()
 ```
 
 ```{r run and plot simulations}
-
+### basically shows that there is no difference in sample method on KL statistic
 #nums <- round(seq(10, 5000, length.out = 10))
-nums <- c(10,200, 400, 500, 600, 700, 800, 900, 1000)
+nums <- c(500, 1000, 1500, 2000, 2500, 3000)
 nums <- rep(nums, each = 5)
 statsRand <- collectStats(ancVals,createRandom,nums)
 statsRand$SType <- "Random"
@@ -626,17 +703,21 @@ statsAll$SType <- as.factor(statsAll$SType) %>% factor(levels = c("Random", "LHS
 
 ###Graphic of number of points needed to match variable space
 statsAll <- statsAll 
-ggplot(statsAll, aes(x = Num, y = KL, fill = SType))+
+plotsim <- ggplot(statsAll, aes(x = Num, y = KL, fill = SType))+
   geom_boxplot()+
-   scale_y_continuous(name = "Kullback-Leibler Divergence", limits=c(0, 8),breaks=seq(0,8,1))+
+   scale_y_continuous(name = "Kullback-Leibler Divergence", limits=c(0, 3),breaks=seq(0,8,1))+
   #labs(x = "Number of Sample Points") +
    scale_fill_discrete(name='Sample Method', labels = c('random', 'cLHS', 'cost cLHS' ))+
   expand_limits(x = 0, y = 0)+
   geom_hline(yintercept = 1,  linetype = "dashed", color = "red")+
   #xlim(0,3000)+
-  theme_light()
+  theme_pem()
+plotsim
+  finalise_plot (plotsim, "./figures/nosamplesbymethodKLis1.png",
+                          width_pixels=640,
+                          height_pixels=450)
 
-ggsave("./Results/KL_Divergence_Points_method.jpeg", device = 'jpeg', width = 6, height=4, units = "in")
+#ggsave("./Results/KL_Divergence_Points_method.jpeg", device = 'jpeg', width = 6, height=4, units = "in")
 
 # statsAll <- statsAll 
 # ggplot(statsAll, aes(x = Num, y = KS, fill = SType))+
@@ -691,8 +772,13 @@ temp <- statsAll[,.(y = median(KL)), by = .(SType,Num)]
 temp[,`:=`(Num = as.numeric(as.character(Num)))]
 numPoints <- temp[,.(nPoints = predict(loess(Num ~ y,data = .SD), data.frame(y = 1))), by = .(SType)]
 numPoints$nPoints <- round(numPoints$nPoints, -1)
-write.table(numPoints, file = "./Results/Number of points required to match covariate distribution.csv", sep = ",", quote = FALSE, row.names = F)
-knitr::kable(numPoints, digits = -1, caption = "Number of points for KL divergence = 1")
+# write.table(numPoints, file = "./Results/Number of points required to match covariate distribution.csv", sep = ",", quote = FALSE, row.names = F)
+# knitr::kable(numPoints, digits = -1, caption = "Number of points for KL divergence = 1")
+
+NumSamples_flex <- flextable(numPoints) %>% align(align = "center", part = "all") %>% set_table_properties(width = .5, layout = "autofit")
+print(NumSamples_flex, preview = "docx")
+save_as_docx(NumSamples_flex , path = "./figures/numPointsforKLis1.docx")
+dev.off()
 
 ```
 
@@ -701,7 +787,7 @@ knitr::kable(numPoints, digits = -1, caption = "Number of points for KL divergen
 Now instead of choosing single points, we use the cclhs or lhs to pick centre points, and then create a triangular transect around it, which we then sample from (either using a second clhs or just regular spacing). The below chunk simulates 3 transect scenarios: non cost-constrained clhs, using clhs to sample from transects, and cost-constrained clhs using both clhs and regular spacing for transect sampling. Note that this chunk takes a while to run and will use all your CPU resources. The time limiting part is not the clhs function, but rather extracting data from the raster stack once each transect has been created (even using Velox this takes a while).
 
 ```{r set up transect simulations}
-ancDatLL_cost <- stack(ancDatLL,acost2)
+ancDatLL_cost <- stack(ancDatLL,acostLL)
 fullSet <- sampleRegular(ancDatLL, size = 100000,sp = T) 
 X <- st_as_sf(fullSet) ##This line takes a while, but I'm not sure of an alternative
 X <- X[!is.na(X$X25m_DAH_3Class),]
@@ -714,6 +800,294 @@ Xcost <- st_as_sf(fullSet)
 Xcost <- Xcost[!is.na(Xcost$X25m_DAH_3Class),]
 Xcost <- Xcost[!is.infinite(Xcost$layer),]
 ```
+
+
+```{r new transects}
+# generate slices clhs per bgc to generate sample points - where there are no prvios points to consider. Use this script when starting from scratch. 
+
+# Note if you have points that were previously used that you want to incorporate into an already set up structure then see code below. 
+
+clhs_outpath <- file.path("./clhs_sample_plans")
+ifelse(!dir.exists(clhs_outpath), dir.create(clhs_outpath, recursive = TRUE), FALSE)
+
+boi <- c ("ESSFmc","ESSFmcw", "SBSmc2") # Deception, 
+subzone <- st_read("./Covariates/bec.gpkg")
+sample_points <- ""
+
+for (b in boi) {
+  #b <- boi[3]
+  
+  subzone1 <- subzone %>% dplyr::filter(MAP_LABEL %in% b)# %>% 
+  subzone_buff <- st_buffer(subzone1, dist = -150)
+  boi_mask <- mask(ancDatLL_cost, subzone_buff)# 
+  sample_layers_masked <- boi_mask 
+
+  for(rot in 1:10){
+    
+  #rot <- 1
+
+  # generate clhs points
+  paired_distance <- 100
+  num_samples <- 60
+  slice_size <- 5
+  rerun <- 0
+  num_slices <- round(num_samples/slice_size)
+  rad_exclusion <- 1000
+  # 
+  lays <- sample_layers_masked 
+  # lays_df <- as.data.frame(lays)
+  # lays_df$DAH <- as.factor(lays_df$DAH)
+  # lays_df$MRVBF <- as.factor(lays_df$MRVBF)  
+  # lays_df$LFC <- as.factor(lays_df$LFC)  
+  # lays_df$num <- 1
+  # 
+  
+  # create a empty sf object and add points
+  tmp <- st_sfc()
+  class(tmp)[1] <- "sfc_POINT" # for points
+  sample_points <- st_sf(DAH=integer(0),
+                     MRVBF=integer(0),
+                     LFC = integer(0),
+                     acostLL=integer(0),
+                     slice_num = integer(0), geometry=tmp)%>%
+   st_set_crs(3005)
+  
+ 
+  for(i in 1:num_slices){ # For each slice, perform cLHS (if there is sampleable area left from previous slices)
+     #i <- 1
+    if(nrow(sample_points) < slice_size*i){
+      
+      clhs_slice <- clhs(lays,
+                         size = slice_size,
+                         iter = 10000,
+                         simple = FALSE,
+                         progress = TRUE,
+                         cost= "acostLL",
+                         use.cpp = T) # Run cLHS on the sampleable area
+      
+      clhs_sampled <- st_as_sf(clhs_slice$sampled_data) %>%
+        mutate(final_obj_continuous = clhs_slice$final_obj_continuous) %>% 
+        mutate(slice_num = i)
+      
+      for(j in 1:nrow(clhs_sampled)){ # Filter the close together samples from the cLHS run
+        #j = 1
+        if(!is.na(clhs_sampled[j, ])){
+          distances <- data.frame(distance = st_distance(clhs_sampled, clhs_sampled[j, ])) %>%
+            rownames_to_column() %>%
+            mutate_all(as.numeric) %>%
+            dplyr::filter(distance > rad_exclusion | distance == 0)
+          clhs_sampled <- clhs_sampled[distances$rowname, ]
+        }
+      }
+      
+      # if number of sites is less than selected add a interator and this clhs willl be re-run using the repeat loop below  
+      # if(length(clhs_sampled$slice_num)< slice_size){
+      #   rerun <- rerun + 1 
+      #   #sample_points
+      #   print("points selected are less than sizes less than selected, re-running clhs")
+      # } else { 
+  
+      # if correct number of samples is selected then continue to next slice 
+        
+      clhs_sampled_buff <- st_buffer(clhs_sampled, dist = rad_exclusion) # Extract and buffer the cLHS points
+      lays <- mask(lays, clhs_sampled_buff, inverse = TRUE)      # Mask the sampleable area
+      sample_points <- bind_rows(sample_points, clhs_sampled) 
+      }
+    }
+  }  
+  
+sample_points
+
+# if any of the runs do not contain the full number of samples then we will run more clhs in a loop until they contain the full number required 
+# 
+# if (rerun > 0) {
+# 
+#   tmp <- st_sfc()
+#     class(tmp)[1] <- "sfc_POINT" # for points
+#     sample_points_extra <- st_sf(DAH=integer(0),
+#                      MRVBF=integer(0),
+#                      LFC = integer(0),
+#                      acostLL=integer(0),
+#                      slice_num = integer(0), geometry=tmp)%>%
+#     st_set_crs(3005)
+# 
+# 
+#   for(re in 1:rerun) {
+#   re = 1
+#   repeat{
+#      clhs_slice <- clhs(lays,
+#                          size = slice_size,
+#                          iter = 100000,
+#                          simple = FALSE,
+#                          progress = TRUE,
+#                          cost = "acostLL",
+#                          use.cpp = T) # Run cLHS on the sampleable area
+# 
+#       clhs_sampled <- st_as_sf(clhs_slice$sampled_data) %>%
+#         mutate(final_obj_continuous = clhs_slice$final_obj_continuous) %>%
+#         mutate(slice_num = slice_size + re)
+# 
+#       for(j in 1:nrow(clhs_sampled)){ # Filter the close together samples from the cLHS run
+#        # j = 1
+#         if(!is.na(clhs_sampled[j, ])){
+#           distances <- data.frame(distance = st_distance(clhs_sampled, clhs_sampled[j, ])) %>%
+#             rownames_to_column() %>%
+#             mutate_all(as.numeric) %>%
+#             dplyr::filter(distance > rad_exclusion | distance == 0)
+#           clhs_sampled <- clhs_sampled[distances$rowname, ]
+#         }
+#       }
+#       if(length(clhs_sampled$acostLL)== slice_size){
+#         print("correct number of pts generated")
+#         sample_points_extra <- sample_points_extra 
+#           st_crs(sample_points_extra) <- 3005
+#         sample_points_extra <- rbind(clhs_sampled, sample_points_extra)
+#         clhs_sampled_buff <- st_buffer(sample_points_extra, dist = rad_exclusion) # Extract and buffer the cLHS points
+#         lays <- mask(lays, clhs_sampled_buff, inverse = TRUE)      # Mask the sampleable area for the next clhs repeat (only if successful!)
+# 
+#         break # stop the repeat clhs loop if corect number achieved
+#       }
+#       # if the number is still less than required repeat the above code until correct number is produced
+#       print("rerunning clhs")
+#     }
+#   } # repeat for number of reruns required
+# 
+#   sample_points <- bind_rows(sample_points, sample_points_extra )
+# } # end of extra repeats to add
+
+xx <- sample_points
+sample_points <- xx
+
+#rownames(sample_points) <- NULL
+sample_points$subzone <- b
+unique_slices <- as.data.frame(table(sample_points$slice_num))
+unique_slices$order =  seq(1:num_slices)
+unique_slices$Var1 = as.numeric(as.character(unique_slices$Var1))
+
+sample_points <- sample_points %>%
+  left_join(unique_slices, by = c("slice_num" = "Var1")) %>%
+  dplyr::select(-c(Freq, slice_num)) %>%
+  dplyr::rename(slice_num = order) %>%
+  arrange(slice_num)
+#sort(sample_points$slice_num)
+
+unique_slices <- as.data.frame(table(sample_points$slice_num))
+
+for(i in 1:length(unique(sample_points$slice_num))){ # Adds appropriate slice number
+  j <- unique(sample_points$slice_num)[i]
+  if(j == unique_slices[i, 1]){
+    j <- which(sample_points$slice_num == as.numeric(j))
+    for(k in 1:length(j)){
+      l <- j[k]
+      sample_points[l, "slice_size"] <- k
+    }
+  }
+}
+
+sample_points <- mutate(sample_points, total = 1:nrow(sample_points)) %>% 
+  mutate(id = paste0(subzone, "_", slice_num, ".", slice_size, "_", total)) %>%
+  dplyr::select(names(.)[!(names(.) %in% names(lays))])
+fwrite(sample_points, paste0("./outputs/",b,  "_theoretical_S1_transectsdesigns2.csv"))
+st_write(sample_points, dsn = file.path(clhs_outpath, paste0("clhs_pts",rot,"_", b,".gpkg")), append = T, driver = "GPKG")  
+#sample_points
+
+ } # end of rotation toc()
+#} # end of bgc loop
+
+```
+
+
+# Select the sample plan with the lowest cost  
+
+Once the clhs points are run, we can assess the cost and pick the lowest cost option or the user can manually review the outputs and then decide on the most favorable option.
+
+
+```{r}
+acost <- raster(file.path(out_path, "input_raster", "acost.tif"))
+sample_cost <- raster(file.path(out_path,"input_raster", "sample_cost.tif"))
+
+ftemp <- list.files(clhs_outpath, pattern = ".gpkg$", full.names = TRUE)
+#ftemp <-ftemp[c(4,5,6,7,8,9)]  # 9,2,10
+costs <- stack(acost, sample_cost)
+#ftemp <- ftemp[1]
+
+all_samples <- foreach(fs = 1:length(ftemp), .combine = "rbind" ) %do% {
+  
+ff <- ftemp[fs]
+   
+# read in all the points per bgc, collate and assign value based on travel cost
+ 
+layers <- st_layers(ff)$name
+
+sample_points_all <- foreach(l = 1:length(layers), .combine = rbind) %do% {
+  ll = layers[l]
+  sptemp <- st_read(ff, layer = ll)
+  sptemp <- sptemp %>%
+    dplyr::mutate(clhs_repeat = basename(ff))
+  sptemp
+  }
+
+}
+
+all_cost <- raster::extract(costs ,as(all_samples, "Spatial"))
+all_samples <- all_samples %>%
+  cbind(all_cost)
+
+# summarise the costs per sample plan
+repsum <- all_samples %>%
+  st_drop_geometry() %>%
+  select(clhs_repeat, subzone, acost, sample_cost)
+
+repsum <- repsum %>%
+  group_by(clhs_repeat, subzone) %>%
+  dplyr::mutate(tcost = sum(acost),
+         scost = sum(sample_cost),
+         no = n()) %>%
+  dplyr::select(- acost, -sample_cost) %>%
+  distinct()
+
+# plot the total costs by subzone
+
+p1 <- ggplot(repsum, aes(y = tcost, x =  clhs_repeat )) +
+  geom_point()+
+  facet_wrap(~subzone)+
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))
+
+p1
+
+# p1s <- ggplot(repsum, aes(y = scost, x =  clhs_repeat )) +
+#   geom_point()+
+#   facet_wrap(~subzone)+
+#   theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))
+# 
+# p1s
+
+p2 <- ggplot(repsum, aes(y = tcost, x =  clhs_repeat, colour = subzone )) +
+  geom_point()+
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1)) + 
+    geom_text(aes(label = no), position = position_dodge(0.5))
+  
+p2
+
+# plot the types of costs (total bgcs combined)
+totsum <- repsum %>%
+  group_by(clhs_repeat)%>%
+  dplyr::mutate(tcost = sum(tcost),
+         scost = sum(scost)) 
+
+# select the lowest cost sample plan: 
+clhs_set <- totsum %>%
+  filter(tcost == min(totsum$tcost)) %>%
+  pull(clhs_repeat) %>%
+  unique()
+
+print(clhs_set)
+
+
+
+
+```
+
 
 ```{r sampling functions}
 ###create LHS transect sample, use clhs to sample transects
@@ -823,7 +1197,7 @@ ggplot(statsAll2, aes(x = Num, y = KL, fill = SType))+
 ###Graphic of number of transects needed to match variable space
 ggplot(statsAll2, aes(x = Num, y = KL, fill = SType))+
   geom_boxplot()+
-  scale_y_continuous(name = "Kullback-Leibler (KL) Divergence", limits=c(0, 8),breaks=seq(0,8,1))+
+  scale_y_continuous(name = "Kullback-Leibler Divergence(KD)", limits=c(0, 8),breaks=seq(0,8,1))+
   labs(x = "Number of Transects") +
   scale_fill_discrete(name='Sample Method', labels = c('all points', 'cLHS subsampled'))+
   expand_limits(x = 0, y = 0)+
