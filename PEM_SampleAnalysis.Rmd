@@ -10,7 +10,6 @@ knitr::opts_chunk$set(echo = FALSE)
 library(clhs)
 library(sf)
 library(raster)
-library(sp)
 library(gdistance)
 library(foreach)
 library(data.table)
@@ -18,18 +17,13 @@ library(fasterize)
 library(reticulate)
 library(here)
 library(LearnGeom)
-library(tidyverse)
-library(goftest)
+library(dplyr)
 library(velox)
 require(ggthemes)
 require(philentropy)
-require(ggthemes)
 require(tictoc)
 require(ggpubr)
-require(reticulate)
 require(flextable)
-require(vsgoftest)
-#install.packages("vsgoftest")
 
 ```
 
@@ -41,49 +35,13 @@ source_python("./mTSP.py")
 require(doParallel)
 cl <- makePSOCKcluster(detectCores()-2)
 registerDoParallel(cl)
-
-fillTest <- function(full, small){
-  strata <- full[,lapply(.SD,function(x) {quantile(x, probs = seq(0, 1, 0.005), na.rm = TRUE)})]
-  
-  fillQual <- foreach(var = 1:ncol(full),.combine = cbind) %do% {
-    .Call(graphics:::C_BinCount, small[[var]], strata[[var]], TRUE,TRUE)
-  }
-  
-  return(length(fillQual[fillQual == 0])) 
-}
-
-fillTest_Transect <- function(full, small){
-  strata <- lapply(
-    full$rasterbands, 
-    function(x) {
-      quantile(x, probs = seq(0, 1, 0.01), na.rm = TRUE)
-    }
-  )
-  fillQual <- foreach(var = 1:ncol(small),.combine = cbind) %do% {
-    .Call(graphics:::C_BinCount, small[,var], strata[[var]], TRUE,TRUE)
-  }
-  
-  return(length(fillQual[fillQual == 0])) 
-}
-
-x=0; y=0
-Tri_build <- function(id, x, y){
-  tris <- CreateRegularPolygon(3, c(x,y), 145) # number of sides, center pt and length of sides
-  tris <- tris[c(1:3,1),]
-  lines <- st_linestring(tris)
-  
-  g = st_sfc(lines)
-  out <- st_sf(g,ID = id)
-  #st_set_crs(newproj)
-  return(out)
-} 
 ```
 
 Load data and setup covariates
 
 ```{r load data}
 datLocGit <- here("InputData") ## Data
-covLoc <- here("Covariates") ## Too big for git data
+covLoc <- here("Covariates/Covariates_PemTSP") ## Too big for git data
 
 ### landscape levels covariates
 covars <- paste(covLoc, c("25m_DAH_3Class.tif","25m_LandformClass_Default_Seive4.tif",
@@ -94,23 +52,6 @@ ancDatLL <- raster::stack(covars)
 proj4string(ancDatLL) <- "+init=epsg:3005"
 becLayer <- raster(paste0(covLoc,"/becRaster.tif"))
 ancDatLL <- mask(ancDatLL,becLayer)
-
-
-# area <- 5
-# if(area == "all"){
-#   becLayer[!is.na(becLayer)] <- 1
-# }else{
-#   becLayer[becLayer != area] <- NA
-# }
-# ancDatLL <- mask(ancDatLL,becLayer)
-
-# LL_corr <- layerStats(ancDatLL, 'pearson', na.rm=T)
-# corr_matrixLL <- LL_corr$'pearson correlation coefficient'
-
-## list of important stand level covariates (about 11 million r)
-#SLcov <- c("tca2.tif","swi_area_mod.tif","tpi.tif")#"twi.tif","valley_depth_2.tif",
-
-##SLcov <- c("twi.tif","valley_depth_2.tif","tca2.tif","swi_area_mod.tif","tpi.tif")
 
 SLcov <- c("twi.tif","valley_depth_2.tif","open_neg.tif","swi_twi.tif","convexity.tif", "rid_level.tif", "mrvbf2.tif")
 covars <- paste(covLoc, SLcov, sep = "/")
@@ -124,42 +65,20 @@ for(i in layerNamesSl){
 ancVals <- as.data.table(getValues(ancDatSL))##table of SL data
 ancVals <- na.omit(ancVals)
 
-### test for high correlation
-# # calculate correlation matrix of variables
-  correlationMatrix <- cor(ancVals)
-# # summarize the correlation matrix
-# #print(correlationMatrix)
-# # find attributes that are highly corrected (ideally >0.75)
-  require(caret)
-  highlyCorrelated <- findCorrelation(correlationMatrix, cutoff=0.7, verbose = TRUE, names = TRUE) ## review for removal of highly correlated vars
-   highlyCorrelated
-  #X0 <- X0 %>% dplyr::select(-c(highlyCorrelated))%>% drop_na(BGC)
-# for(i in layerNamesSl){
-#   temp <- values(ancDatSL[[i]])
-#   hist1 <- hist(temp,breaks = 50, plot = F)
-#   dens <- hist1$counts/sum(hist1$counts)
-#   mx <- which(dens == max(dens))
-#   dens[1:mx] <- 1
-#   small <- which(dens < 0.01)
-#   cutoff <- hist1$breaks[small[1] + 1]
-#   ancDatSL[[i]][ancDatSL[[i]] > cutoff] <- NA
-# }
-
-# ancDatSL <- mask(ancDatSL,becLayer)
-
-# SL_corr <- layerStats(ancDatSL, 'pearson', na.rm=T)
-# corr_matrixSL <- SL_corr$'pearson correlation coefficient'
-
-##combine layers to compare correlation
-# ancDatLL2 <- projectRaster(ancDatLL, ancDatSL, method = 'ngb')
-# ancDatALL <- stack(ancDatSL, ancDatLL2)
-# All_corr <- layerStats(ancDatALL, 'pearson', na.rm=T)
-# corr_matrixAll <- All_corr$'pearson correlation coefficient'
+# ### test for high correlation
+# # # calculate correlation matrix of variables
+#   correlationMatrix <- cor(ancVals)
+# # # summarize the correlation matrix
+# # #print(correlationMatrix)
+# # # find attributes that are highly corrected (ideally >0.75)
+#   require(caret)
+#   highlyCorrelated <- findCorrelation(correlationMatrix, cutoff=0.7, verbose = TRUE, names = TRUE) ## review for removal of highly correlated vars
+#    highlyCorrelated
 
 ## dem for transtion layer should be 25m?
 alt <- raster(paste0(covLoc, "/dem.tif")) 
 proj4string(alt) <- "+init=epsg:3005"
-altLL <- raster(paste0(covLoc, "/DEM25m.tif"))
+altLL <- raster(paste0(covLoc, "/dem25m.tif"))
 proj4string(altLL) <- "+init=epsg:3005"
 ## template raster
 allRast <- raster(paste0(covLoc,"/Road_Rast_Small.tif"))    
@@ -187,8 +106,8 @@ acostLL <- raster("./Results/acostLL.tif")
 ancDatSL_cost <- stack(ancDatSL,acost2)
 ancDatLL_cost <- stack(ancDatLL,acostLL)
 
-# ##generate new cost layer
-# ##road speed
+##generate new cost layer
+##road speed
 # rSpd <- fread("road_speed.csv")
 # rSpd[,Values := speed]
 # rdsAll <- merge(rdsAll, rSpd, by = "road_surface", all = F)
@@ -244,7 +163,7 @@ ancDatLL_cost <- stack(ancDatLL,acostLL)
 # acost2 <- mask(acost2, alt)
 # acostLL <- projectRaster(acost, ancDatLL)
 # acostLL  <- mask(acostLL, altLL)
-# #ancDatSL_cost <- stack(ancDatSL,acost2)
+# ancDatSL_cost <- stack(ancDatSL,acost2)
 # 
 # plot(acost2)
 # writeRaster(acost, "./Results/acost.tif", format = "GTiff", overwrite = TRUE)
@@ -279,176 +198,6 @@ ancVals <- as.data.table(getValues(ancDatSL))##table of SL data
 ancVals <- na.omit(ancVals)
 idVals <- ancVals$CellID
 ancVals[,CellID := NULL]
-
-##KL statistic (this one works best)
-#xx <- KL_stat_clhs(s1)
-KL_stat_clhs <- function(sample){
-  sampDat <- as.data.table(sample)
-  sampDat <- na.omit(sampDat)
-  nsamp <- nrow(sampDat)
-  
-  ancBin <- ancVals[,lapply(.SD, function(x){cut(x,breaks = seq(min(x),max(x),length.out = 9),labels = F,include.lowest = T)})]
-  ancBin <- copy(unite(ancBin, LHSVar, sep = "_"))
-  ancSmall <- ancBin[,.(Num = .N), by = .(LHSVar)] ##count occurences
-  ancSmall <- ancSmall[Num > 150,] ##remove uncommon
-  setorder(ancSmall,-Num)
-  ancSmall[,ID := seq_along(Num)]
-  ancBin[ancSmall, ID := i.ID, on = "LHSVar"]
-  ancBin <- na.omit(ancBin)
-  
-  fullBreaks <- ancVals[,lapply(.SD,function(x){seq(min(x),max(x),length.out = 9)})]
-  ##split into same bins as full data set
-  for(i in 1:ncol(sampDat)){
-    sampDat[[i]] <- cut(sampDat[[i]],breaks = fullBreaks[[i]], labels = F, include.lowest = T)
-  }
-  sampBin <- copy(unite(sampDat,sampLHS,sep = "_"))
-  sampBin[ancSmall, ID := i.ID, on = c(sampLHS = "LHSVar")]
-  sampBin <- na.omit(sampBin)
-  sampBin <- sampBin[,.(SampNum = .N), by = .(sampLHS)]##count
-  #merge to compare
-  fullDat <- copy(ancSmall)
-  fullDat[sampBin, SampNum := i.SampNum, on = c(LHSVar = "sampLHS")]
-  fullDat[is.na(SampNum), SampNum := 0]
-  fullDat[,SampNum := SampNum/sum(SampNum)]
-  fullDat[,Num := Num/sum(Num)]
-  tempMat <- rbind(fullDat$Num,fullDat$SampNum)
-
-  kl2 <- KL(tempMat) ## return KL divergence
-  js2 <- JSD(tempMat) ## returns JS divergenxe
-  temp <- t(tempMat)# %>% dplyr::select()
-  ks2 <- ks.test(temp[,1], temp[,2], alternative = "g")
-  ks2p <- ks2$p.value## returns KS statistic and p value
-  return(kl2, ks2p, js2, js2, ks2$statistic)
-}
-
-# #sample = s3
-# KS_prob_clhs <- function(sample){
-#   sampDat <- as.data.table(sample)
-#   sampDat <- na.omit(sampDat)
-#   nsamp <- nrow(sampDat)
-#   
-#   ancBin <- ancVals[,lapply(.SD, function(x){cut(x,breaks = seq(min(x),max(x),length.out = 9),labels = F,include.lowest = T)})]
-#   ancBin <- copy(unite(ancBin, LHSVar, sep = "_"))
-#   ancSmall <- ancBin[,.(Num = .N), by = .(LHSVar)] ##count occurences
-#   ancSmall <- ancSmall[Num > 150,] ##remove uncommon
-#   setorder(ancSmall,-Num)
-#   ancSmall[,ID := seq_along(Num)]
-#   ancBin[ancSmall, ID := i.ID, on = "LHSVar"]
-#   ancBin <- na.omit(ancBin)
-#   
-#   fullBreaks <- ancVals[,lapply(.SD,function(x){seq(min(x),max(x),length.out = 9)})]
-#   ##split into same bins as full data set
-#   for(i in 1:ncol(sampDat)){
-#     sampDat[[i]] <- cut(sampDat[[i]],breaks = fullBreaks[[i]], labels = F, include.lowest = T)
-#   }
-#   sampBin <- copy(unite(sampDat,sampLHS,sep = "_"))
-#   sampBin[ancSmall, ID := i.ID, on = c(sampLHS = "LHSVar")]
-#   sampBin <- na.omit(sampBin)
-#   sampBin <- sampBin[,.(SampNum = .N), by = .(sampLHS)]##count
-#   #merge to compare
-#   fullDat <- copy(ancSmall)
-#   fullDat[sampBin, SampNum := i.SampNum, on = c(LHSVar = "sampLHS")]
-#   fullDat[is.na(SampNum), SampNum := 0]
-#   fullDat[,SampNum := SampNum/sum(SampNum)]
-#   fullDat[,Num := Num/sum(Num)]
-#   tempMat <- rbind(fullDat$Num,fullDat$SampNum)
-# 
-#   kl2 <- KL(tempMat) ## return KL divergence
-#   js2 <- JSD(tempMat) ## returns JS divergenxe
-#   temp <- t(tempMat)# %>% dplyr::select()
-#   ks2 <- ks.test(temp[,1], temp[,2])
-#   ks2p <- ks2$p.value %>% as.numeric()## returns KS statistic and p value
-#   return(ks2p)#kl2, ,ks2p js2, js2, ks2$statistic))
-# }
-# 
-
-##using KS statistic
-KS_stat_clhs <- function(sample){
-  sampDat <- as.data.table(sample)
-  sampDat <- na.omit(sampDat)
-  nsamp <- nrow(sampDat)
-  
-  ancBin <- ancVals[,lapply(.SD, function(x){cut(x,breaks = seq(min(x),max(x),length.out = 15),labels = F,include.lowest = T)})]
-  ancBin <- copy(unite(ancBin, LHSVar, sep = "_"))
-  ancSmall <- ancBin[,.(Num = .N), by = .(LHSVar)] ##count occurences
-  ancSmall <- ancSmall[Num > 150,] ##remove uncommon
-  setorder(ancSmall,-Num)
-  ancSmall[,ID := seq_along(Num)]
-  ancBin[ancSmall, ID := i.ID, on = "LHSVar"]
-  ancBin <- na.omit(ancBin)
-  
-  fullBreaks <- ancVals[,lapply(.SD,function(x){seq(min(x),max(x),length.out = 15)})]
-  ##split into same bins as full data set
-  for(i in 1:ncol(sampDat)){
-    sampDat[[i]] <- cut(sampDat[[i]],breaks = fullBreaks[[i]], labels = F, include.lowest = T)
-  }
-  sampBin <- copy(unite(sampDat,sampLHS,sep = "_"))
-  sampBin[ancSmall, ID := i.ID, on = c(sampLHS = "LHSVar")]
-  sampBin <- na.omit(sampBin)
-
-  sampBin <- sampBin[,.(SampNum = .N), by = .(sampLHS)]##count
-  #merge to compare
-  fullDat <- copy(ancSmall)
-  fullDat[sampBin, SampNum := i.SampNum, on = c(LHSVar = "sampLHS")]
-  fullDat[is.na(SampNum), SampNum := 0]
-  fullDat[,SampNum := SampNum/sum(SampNum)]
-  fullDat[,Num := Num/sum(Num)]
-  #fullDat[,Diff := abs(Num - SampNum)]
-  t1 <- cumsum(fullDat$SampNum)
-  t2 <- cumsum(fullDat$Num)
-  return(max(abs(t2-t1)))
-  #return(mean(fullDat$Diff))
-}
-#sample = s1
-plotUniDists <- function(sample){
-  sampDat <- as.data.table(sample)
-  sampDat <- na.omit(sampDat)
-  nsamp <- nrow(sampDat)
-  
-  ancBin <- ancVals[,lapply(.SD, function(x){cut(x,breaks = seq(min(x),max(x),length.out = 9),labels = F,include.lowest = T)})]
-  ancBin <- copy(unite(ancBin, LHSVar, sep = "_"))
-  ancSmall <- ancBin[,.(Num = .N), by = .(LHSVar)] ##count occurences
-  ancSmall <- ancSmall[Num > 150,] ##remove uncommon
-  setorder(ancSmall,-Num)
-  ancSmall[,ID := seq_along(Num)]
-  ancBin[ancSmall, ID := i.ID, on = "LHSVar"]
-  ancBin <- na.omit(ancBin)
-  
-  fullBreaks <- ancVals[,lapply(.SD,function(x){seq(min(x),max(x),length.out = 9)})]
-  ##split into same bins as full data set
-  for(i in 1:ncol(sampDat)){
-    sampDat[[i]] <- cut(sampDat[[i]],breaks = fullBreaks[[i]], labels = F, include.lowest = T)
-  }
-  sampBin <- copy(unite(sampDat,sampLHS,sep = "_"))
-  sampBin[ancSmall, ID := i.ID, on = c(sampLHS = "LHSVar")]
-  sampBin <- na.omit(sampBin)
-  sampBin <- sampBin[,.(SampNum = .N), by = .(sampLHS)]##count
-  #merge to compare
-  fullDat <- copy(ancSmall)
-  fullDat[sampBin, SampNum := i.SampNum, on = c(LHSVar = "sampLHS")]
-  fullDat[is.na(SampNum), SampNum := 0]
-  fullDat[,SampNum := SampNum/sum(SampNum)]
-  fullDat[,Num := Num/sum(Num)]
-  tempMat <- rbind(fullDat$Num,fullDat$SampNum)
-  kl2 <- KL(tempMat)
-
-#   require(ggsci)
-#   print(ggplot(fullDat, aes(x = ID, y = value, col = variable, group = variable))+
-#     geom_line(size = .5, position=position_dodge(width=5))+
-#     scale_size_manual(values=c(2,2))+
-#       scale_y_continuous(name = "Bin ratio of total map area", limits=c(0, .12)) + #, ,breaks=seq(0,8,1))
-#     scale_color_aaas( name='Source', labels = c('map area', 'cLHS point sample'))+
-#       scale_linetype_manual(values=c("solid", "dotted"))+
-#     expand_limits(x = 0, y = 0) +
-#   xlab("Multivariate Bins")+
-#   theme_light())
-# #ggsave("./Results/Discretized Multivariate Distribution.jpeg", device = 'jpeg', width = 6, height=4, units = "in")
-
-
-  return(list(data = fullDat, KL = kl2))
-
-}
-
 ```
 
 
@@ -496,40 +245,6 @@ collectStats <- function(X,sampleFun,nums,testFun1 = KL_stat_clhs, testFun2 = KS
 
 ```
 
-
-```{r example univariate distributions examples}
-# s1 <- createLHS(ancVals,10000)
-# s2 <- createLHS(ancVals, 660)
-# s3 <- createLHS(ancVals, 100)
-# p1 <- plotUniDists(s1)
-# p2 <- plotUniDists(s2)
-# p3 <- plotUniDists(s3)
-# s1stats <- collectStats(ancVals,createLHS, 10000) %>% select(KL, KS) %>% as.numeric() %>% round(3)
-# s1.kl.lab <- paste("KL divergence = ", s1stats[1])
-# s1.ks.lab <- paste("KS = ", s1stats[2])
-# s1.lab <- paste("10000 samples", s1.kl.lab, s1.ks.lab, sep="\n")
-# s2stats <- collectStats(ancVals,createLHS, 600) %>% select(KL, KS) %>% as.numeric() %>% round(3)
-# s2.kl.lab <- paste("KL divergence = ", s2stats[1])
-# s2.ks.lab <- paste("KS = ", s2stats[2])
-# s2.lab <- paste("660 samples", s2.kl.lab, s2.ks.lab, sep="\n")
-# s3stats <- collectStats(ancVals,createLHS, 100) %>% select(KL, KS) %>% as.numeric() %>% round(3)
-# s3.kl.lab <- paste("KL divergence = ", s3stats[1])
-# s3.ks.lab <- paste("KS = ", s3stats[2])
-# s3.lab <- paste("100 samples", s3.kl.lab, s3.ks.lab, sep="\n")
-# #statsLHS$SType <- "LHS"
-# library(ggpubr)
-# p123 <- ggarrange(p3, p2, p1, ncol = 3, labels = c(s3.lab, s2.lab, s1.lab), widths = c(4, 4, 4),
-#                   label.x = 0.14, label.y = .99,
-#                   font.label = list(size = 8, color = "black", face = "bold", family = NULL),
-#           common.legend = TRUE, legend = "bottom") # Second row with box and dot plots
-# 
-# plot(p123)
-##ggexport(p123, filename = "./Results/sampledistribution.jpg", width = 2000, height = 1000,res = 300)
-# s2 <- createCCLHS(ancVals,45)
-# plotUniDists(s2)
-#s2 <- createRandom(ancVals,400)
-```
-
 # Create examples of summary distributions for manuscript
 #
 ```{r univariate distributions}
@@ -559,11 +274,11 @@ dat[,Label := as.factor(Label)]
 dat[,Label := reorder(Label,NumSamples)]
 
 dat2 <- melt(dat, id.vars = c("Label","ID"), measure.vars = c("Num","SampNum"))
-source("./_functions/doc_theme_pem.r")
+source("./_functions/doc_theme_pem.R")
 fillspace <- ggplot(dat2, aes(x = ID, y = value, colour = variable, size = variable)) +
   geom_line() +
   facet_wrap(.~Label)+
-  theme_pem_facet()+
+  ##theme_pem_facet()+
   scale_color_manual(name = "Source", values = c("black","grey"), labels = c("Map Area","cLHS Sample")) +
   scale_size_manual(name = "Source",values = c(3.2,0.8),labels = c("Actual Distribution","cLHS Sample")) +
   scale_alpha(range = c(0.4, 0.8))+
@@ -573,9 +288,6 @@ fillspace
                           width_pixels=640,
                           height_pixels=450)
 dev.off()
-
-
-
 ```
 
 ## Test filling of real data. Add by slice
@@ -716,55 +428,9 @@ plotsim
   finalise_plot (plotsim, "./figures/nosamplesbymethodKLis1.png",
                           width_pixels=640,
                           height_pixels=450)
-
-#ggsave("./Results/KL_Divergence_Points_method.jpeg", device = 'jpeg', width = 6, height=4, units = "in")
-
-# statsAll <- statsAll 
-# ggplot(statsAll, aes(x = Num, y = KS, fill = SType))+
-#   geom_boxplot()+
-#    scale_y_continuous(name = "Kolmogorov-Smirnov statistic", limits=c(0, 1),breaks=seq(0,1,.1))+
-#   #labs(x = "Number of Sample Points") +
-#    scale_fill_discrete(name='Sample Method', labels = c('random', 'cLHS', 'cost cLHS' ))+
-#   expand_limits(x = 0, y = 0)+
-#   geom_hline(yintercept = 1,  linetype = "dashed", color = "red")+
-#   #xlim(0,3000)+
-#   theme_light()
-# 
-# ggsave("./Results/KS_Divergence_Points_method.jpeg", device = 'jpeg', width = 6, height=4, units = "in")
-
-
-
-# 
-# ggplot(statsAll, aes(x = Num, y = Fill, fill = SType))+
-#   geom_boxplot()+
-#   scale_y_continuous(name = "Covariate bins filled", limits=c(0, 8),breaks=seq(0,8,1))+
-#   labs(x = "Number of Sample Points") +
-#   expand_limits(x = 0, y = 0)+
-#   theme_light()
-# 
-# ggsave("./Results/CovariateBins_method.jpeg", device = 'jpeg', width = 6, height=4, units = "in")
- # statsAll <- as.data.table(statsAll)
-# statsAll[, Norm := (KS-min(KS))/(max(KS)-min(KS))]
-# statsAll[,Norm := 1-Norm]
-# KSplot <- ggplot(statsAll, aes(x = Num, y = Norm, fill = SType))+
-#   geom_boxplot() +
-#   labs(x = "Minimum Number of Training Points", y= "Kolmogorov-Smirnov statistic")+ 
-#   scale_fill_discrete(guide = guide_legend(reverse=TRUE), name='Sample Method', labels = c('cost cLHS', 'cLHS', 'random'))+
-#   theme_few()
-# plot(KSplot)
-# ggsave("./Results/K-S Plot.jpeg", device = 'jpeg')
-# 
-# binfillplot <- ggplot(statsAll, aes(x = Num, y = fill, fill = SType))+
-#   geom_boxplot() +
-#   labs(x = "Minimum Number of Training Points", y= "Bins remaining to be filled")+ 
-#   scale_fill_discrete(guide = guide_legend(reverse=TRUE), name='Sample Method', labels = c('cost cLHS', 'cLHS', 'random'))+
-#   theme_few()
-# plot(binfillplot)
-# ggsave("./Results/Bin fill Plot.jpeg", device = 'jpeg')
 ```
 
 ```{r num single points}
-
 ###this needs to be adjusted to reflect a set KL distance
 statsAll <- as.data.table(statsAll)
 temp <- statsAll[,.(y = median(KL)), by = .(SType,Num)]
