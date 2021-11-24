@@ -40,6 +40,7 @@ The below chunk creates some generic statistical functions
 # registerDoMC(10)
 
 source("./SampleAnalysis_functions.R")
+source("./_functions/doc_theme_pem.R")
 ```
 
 Load data and setup covariates
@@ -47,7 +48,7 @@ Load data and setup covariates
 ```{r load data}
 datLocGit <- here("InputData") ## Data
 covLoc <- here("Covariates/Covariates_PemTSP") ## Too big for git data
-
+covLoc <- here("Covariates")
 ### landscape levels covariates
 covars <- paste(covLoc, c("25m_DAH_3Class.tif","25m_LandformClass_Default_Seive4.tif",
                           "25m_MRVBF_Classified_IS64Low6Up2.tif","becRaster.tif"), sep = "/")# ,"DEM_25m.tif"
@@ -239,7 +240,7 @@ collectStats <- function(X,sampleFun,nums,testFun1 = KL_stat_clhs){ ##KS_prob_cl
 ```{r run and plot simulations}
 ### basically shows that there is no difference in sample method on KL statistic
 #nums <- round(seq(10, 5000, length.out = 10))
-nums <- c(500, 1000, 1500, 2000, 2500, 3000)
+nums <- c(500, 1000, 1500, 2000, 2500, 3000,3500)
 nums <- rep(nums, each = 5)
 statsRand <- collectStats(ancVals,createRandom,nums)
 statsRand$SType <- "Random"
@@ -256,11 +257,12 @@ statsAll$SType <- as.factor(statsAll$SType) %>% factor(levels = c("Random", "LHS
 statsAll <- statsAll 
 plotsim <- ggplot(statsAll, aes(x = Num, y = KL, fill = SType))+
   geom_boxplot()+
-   scale_y_continuous(name = "Kullback-Leibler Divergence", limits=c(0, 3),breaks=seq(0,8,1))+
+   #scale_y_continuous(name = "Kullback-Leibler Divergence", limits=c(0, 3),breaks=seq(0,8,1))+
   #labs(x = "Number of Sample Points") +
    scale_fill_discrete(name='Sample Method', labels = c('random', 'cLHS', 'cost cLHS' ))+
   expand_limits(x = 0, y = 0)+
-  geom_hline(yintercept = 1,  linetype = "dashed", color = "red")+
+  geom_hline(yintercept = 1,  linetype = "dashed", color = "black")+
+   scale_fill_grey(start = 1, end = .4)+
   #xlim(0,3000)+
   theme_pem()
 plotsim
@@ -283,7 +285,7 @@ numPoints$nPoints <- round(numPoints$nPoints, -1)
 NumSamples_flex <- flextable(numPoints) %>% align(align = "center", part = "all") %>% set_table_properties(width = .5, layout = "autofit")
 print(NumSamples_flex, preview = "docx")
 save_as_docx(NumSamples_flex , path = "./figures/numPointsforKLis1.docx")
-dev.off()
+#dev.off()
 
 ```
 
