@@ -60,6 +60,61 @@ KL_stat_clhs <- function(sample,ancSmall){
   return(kl2) #, ks2p, js2, js2, ks2$statistic
 }
 
+KL_stat_noextra <- function(sample,ancSmall){
+  sampDat <- as.data.table(sample)
+  sampDat <- na.omit(sampDat)
+  nsamp <- nrow(sampDat)
+  
+  fullBreaks <- ancVals[,lapply(.SD,function(x){seq(min(x),max(x),length.out = 9)})]
+  ##split into same bins as full data set
+  for(i in 1:ncol(sampDat)){
+    sampDat[[i]] <- cut(sampDat[[i]],breaks = fullBreaks[[i]], labels = F, include.lowest = T)
+  }
+  sampBin <- copy(unite(sampDat,sampLHS,sep = "_"))
+  sampBin[ancSmall, ID := i.ID, on = c(sampLHS = "LHSVar")]
+  sampBin <- na.omit(sampBin)
+  sampBin <- sampBin[,.(SampNum = .N), by = .(sampLHS)]##count
+  #merge to compare
+  fullDat <- copy(ancSmall)
+  fullDat[sampBin, SampNum := i.SampNum, on = c(LHSVar = "sampLHS")]
+  fullDat[is.na(SampNum), SampNum := 0]
+  fullDat[,SampNum := SampNum/sum(SampNum)]
+  fullDat[,Num := Num/sum(Num)]
+  fullDat[Num < SampNum, SampNum := Num]
+  fullDat[Num > SampNum, SampNum := SampNum/sum(SampNum)]
+  fullDat[,SampNum := SampNum/sum(SampNum)]
+  tempMat <- rbind(fullDat$Num,fullDat$SampNum)
+  
+  kl2 <- suppressMessages(KL(tempMat)) ## return KL divergence
+  return(kl2) #, ks2p, js2, js2, ks2$statistic
+}
+
+binfill_clhs <- function(sample,ancSmall){
+  sampDat <- as.data.table(sample)
+  sampDat <- na.omit(sampDat)
+  nsamp <- nrow(sampDat)
+  
+  fullBreaks <- ancVals[,lapply(.SD,function(x){seq(min(x),max(x),length.out = 9)})]
+  ##split into same bins as full data set
+  for(i in 1:ncol(sampDat)){
+    sampDat[[i]] <- cut(sampDat[[i]],breaks = fullBreaks[[i]], labels = F, include.lowest = T)
+  }
+  sampBin <- copy(unite(sampDat,sampLHS,sep = "_"))
+  sampBin[ancSmall, ID := i.ID, on = c(sampLHS = "LHSVar")]
+  sampBin <- na.omit(sampBin)
+  sampBin <- sampBin[,.(SampNum = .N), by = .(sampLHS)]##count
+  #merge to compare
+  fullDat <- copy(ancSmall)
+  fullDat[sampBin, SampNum := i.SampNum, on = c(LHSVar = "sampLHS")]
+  fullDat[is.na(SampNum), SampNum := 0]
+  fullDat[,SampNum := SampNum/sum(SampNum)]
+  fullDat[,Num := Num/sum(Num)]
+  fullDat[,CumAmount := cumsum(Num)]
+  top80 <- fullDat[CumAmount < 0.5,]
+  numFull <- nrow(top80[SampNum > 0,])
+  return(numFull/nrow(top80))
+}
+
 plotUniDists <- function(sample){
   sampDat <- as.data.table(sample)
   sampDat <- na.omit(sampDat)
