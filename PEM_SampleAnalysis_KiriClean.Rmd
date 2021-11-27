@@ -404,7 +404,7 @@ ggplot(allTrans, aes(x = NumTransects, y = KL, fill = Type)) +
 ## Calculate number of sites to fill
 
 ```{r num points}
-KLCutoff <- 1.25
+KLCutoff <- 1.3
 statsAll2 <- as.data.table(allTrans)
 temp <- statsAll2[,.(y = median(KL)), by = .(Type,SliceNum)]
 temp[,`:=`(SliceNum = as.numeric(as.character(SliceNum)))]
@@ -429,8 +429,6 @@ s1Dat <- s1Dat[,.(x,y,ID,mapunit1, slice)]
 setnames(s1Dat, old = "mapunit1", new = "Unit")
 s1Points <- st_as_sf(s1Dat,coords = c("x","y"), crs = 3005)
 totalSlices <- max(s1Points$slice)
-
-transPerSlice
 
 ##all slice combinations
 datAll <- foreach(nslice = 1:totalSlices, .combine = rbind) %do% {
@@ -485,9 +483,9 @@ collectTime2 <- function(X,num, nReps = numSims, plotTime = 45L, minNum = 3L){
 
 #clhs regular resampling
 #numNeeded <- numTrans[SType == "cLHS_resample",as.integer(nTrans)]
-transTime <- collectTime2(Xcost,transSingleNum * 5)
+transTime <- collectTime2(Xcost,as.integer((transSingleNum * 5)/4))
 transTime$SType <- "Single Transect"
-pairedTime <- collectTime2(Xcost,transPairedNum * 5)
+pairedTime <- collectTime2(Xcost,as.integer((transPairedNum * 5)/4))
 pairedTime$SType <- "Paired Transect"
 ################################################################
 ##single points clhs sampled
@@ -506,7 +504,8 @@ numNeeded <- as.integer(numSinglePts)
 ## note this part takes about 10 mins (should be nSims*5)
 SinglePoint <- foreach(n = 1:numSims, .combine = rbind) %do% { #
                     ##reticulate::source_python("mTSP.py")
-                    templhs <- clhs(slDatSm,size = as.integer(numNeeded/6),cost = ncol(allSLDat),use.cpp = T, iter = 5000,simple = F)#6000
+                    cat(".")
+                    templhs <- clhs(slDatSm,size = as.integer(numNeeded/4),cost = ncol(allSLDat),use.cpp = T, iter = 5000,simple = F)#6000
                     tempdat <- templhs$sampled_data
                     cellNums <- as.numeric(rownames(tempdat))
                     dat <- raster::xyFromCell(ancDatSL_cost,cell = cellNums, sp = T)
@@ -514,7 +513,7 @@ SinglePoint <- foreach(n = 1:numSims, .combine = rbind) %do% { #
                     dat <- cbind(1:nrow(dat),dat)
                     if(nrow(dat) > 1){
                       time <- calcCost_clhs(dat,templhs$final_obj_continuous,plotTime = 2L,minPerDay = 8L)
-                      data.table(Rep = n, Cost = time*6)
+                      data.table(Rep = n, Cost = time)
                     }else{
                       NULL
                     }
