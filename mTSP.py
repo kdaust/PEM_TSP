@@ -11,6 +11,20 @@ from ortools.constraint_solver import routing_enums_pb2
 from ortools.constraint_solver import pywrapcp
 import numpy as np
 
+file = open("dMatSave.csv")
+dat = np.loadtxt(file, delimiter=",")
+num_days = int(10)
+start = int(25)
+end = int(25)
+max_cost = int(480)
+plot_time = int(2)
+GSC = int(10)
+arbDepot = False
+penalty = [29276, 23898, 38238, 30172, 38238, 18521, 28379, 19417, 19417, 
+12248, 19417, 14040, 14040, 14040, 14040, 23898, 9559, 9559, 
+19417, 20314, 24795, 18521, 29276, 19417, 19417]
+
+
 def py_mTSP(dat, num_days, start, end, max_cost, plot_time, penalty, arbDepot, GSC = 10):
     dat2 = dat.copy()
     # if(arbDepot):
@@ -24,7 +38,7 @@ def py_mTSP(dat, num_days, start, end, max_cost, plot_time, penalty, arbDepot, G
     data['ends'] = end
     
     # Create the routing index manager.
-    manager = pywrapcp.RoutingIndexManager(len(data['distance_matrix']),data['num_vehicles'], data['starts'], data['ends'])
+    manager = pywrapcp.RoutingIndexManager(len(data['distance_matrix']),data['num_vehicles'], data['starts'])
     # Create Routing Model.
     routing = pywrapcp.RoutingModel(manager)
 
@@ -71,6 +85,16 @@ def py_mTSP(dat, num_days, start, end, max_cost, plot_time, penalty, arbDepot, G
     # Solve the problem.
     solution = routing.SolveWithParameters(search_parameters)
     
+    def numEmpty():
+        empty = 0
+        for vehicle_id in range(data['num_vehicles']):
+            index = routing.Start(vehicle_id)
+            index = solution.Value(routing.NextVar(index))
+            if(routing.IsEnd(index)):
+                empty = empty+1
+        return(empty)
+    
+    numEmpty()
     ##collect solution and return
     plan_output = dict.fromkeys(range(data['num_vehicles']),None)
     dist_output = dict.fromkeys(range(data['num_vehicles']),None)
