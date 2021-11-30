@@ -242,6 +242,7 @@ calcCost_clhs <- function(pnts,objVals,plotTime = 50L, minPerDay = 3L){
   objVals <- as.integer(objVals)
   
   ndays <- as.integer(ceiling(n/minPerDay)+1)
+  
   pen = objVals
   
   indStart <- as.integer(rep(n,ndays))

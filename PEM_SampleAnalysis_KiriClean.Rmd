@@ -36,8 +36,8 @@ source_python("./mTSP.py")
 # require(doParallel)
 # cl <- makePSOCKcluster(detectCores()-4)
 # registerDoParallel(cl)
-library(doMC)
-registerDoMC(10)
+# library(doMC)
+# registerDoMC(10)
 
 source("./SampleAnalysis_functions.R")
 source("./_functions/doc_theme_pem.R")
@@ -460,6 +460,12 @@ timeCCLHS <- function(X,n){
   temp <- clhs(xMat,size = n,cost = ncol(xMat),iter = 5000,use.cpp = T,simple = F)
   return(temp)
 }
+
+X <- Xcost
+num <- 25
+templhs <- timeCCLHS(X,num)
+dat <- X[templhs$index_samples,]
+calcCost_clhs(dat,templhs$final_obj_continuous,45L,3L)
 
 collectTime2 <- function(X,num, nReps = numSims, plotTime = 45L, minNum = 3L){
   pkgs <- c("Rcpp","LaplacesDemon", "foreach","sf",
