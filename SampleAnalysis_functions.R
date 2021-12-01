@@ -60,6 +60,61 @@ KL_stat_clhs <- function(sample,ancSmall){
   return(kl2) #, ks2p, js2, js2, ks2$statistic
 }
 
+KL_stat_noextra <- function(sample,ancSmall){
+  sampDat <- as.data.table(sample)
+  sampDat <- na.omit(sampDat)
+  nsamp <- nrow(sampDat)
+  
+  fullBreaks <- ancVals[,lapply(.SD,function(x){seq(min(x),max(x),length.out = 9)})]
+  ##split into same bins as full data set
+  for(i in 1:ncol(sampDat)){
+    sampDat[[i]] <- cut(sampDat[[i]],breaks = fullBreaks[[i]], labels = F, include.lowest = T)
+  }
+  sampBin <- copy(unite(sampDat,sampLHS,sep = "_"))
+  sampBin[ancSmall, ID := i.ID, on = c(sampLHS = "LHSVar")]
+  sampBin <- na.omit(sampBin)
+  sampBin <- sampBin[,.(SampNum = .N), by = .(sampLHS)]##count
+  #merge to compare
+  fullDat <- copy(ancSmall)
+  fullDat[sampBin, SampNum := i.SampNum, on = c(LHSVar = "sampLHS")]
+  fullDat[is.na(SampNum), SampNum := 0]
+  fullDat[,SampNum := SampNum/sum(SampNum)]
+  fullDat[,Num := Num/sum(Num)]
+  fullDat[Num < SampNum, SampNum := Num]
+  fullDat[Num > SampNum, SampNum := SampNum/sum(SampNum)]
+  fullDat[,SampNum := SampNum/sum(SampNum)]
+  tempMat <- rbind(fullDat$Num,fullDat$SampNum)
+  
+  kl2 <- suppressMessages(KL(tempMat)) ## return KL divergence
+  return(kl2) #, ks2p, js2, js2, ks2$statistic
+}
+
+binfill_clhs <- function(sample,ancSmall){
+  sampDat <- as.data.table(sample)
+  sampDat <- na.omit(sampDat)
+  nsamp <- nrow(sampDat)
+  
+  fullBreaks <- ancVals[,lapply(.SD,function(x){seq(min(x),max(x),length.out = 9)})]
+  ##split into same bins as full data set
+  for(i in 1:ncol(sampDat)){
+    sampDat[[i]] <- cut(sampDat[[i]],breaks = fullBreaks[[i]], labels = F, include.lowest = T)
+  }
+  sampBin <- copy(unite(sampDat,sampLHS,sep = "_"))
+  sampBin[ancSmall, ID := i.ID, on = c(sampLHS = "LHSVar")]
+  sampBin <- na.omit(sampBin)
+  sampBin <- sampBin[,.(SampNum = .N), by = .(sampLHS)]##count
+  #merge to compare
+  fullDat <- copy(ancSmall)
+  fullDat[sampBin, SampNum := i.SampNum, on = c(LHSVar = "sampLHS")]
+  fullDat[is.na(SampNum), SampNum := 0]
+  fullDat[,SampNum := SampNum/sum(SampNum)]
+  fullDat[,Num := Num/sum(Num)]
+  fullDat[,CumAmount := cumsum(Num)]
+  top80 <- fullDat[CumAmount < 0.5,]
+  numFull <- nrow(top80[SampNum > 0,])
+  return(numFull/nrow(top80))
+}
+
 plotUniDists <- function(sample){
   sampDat <- as.data.table(sample)
   sampDat <- na.omit(sampDat)
@@ -155,4 +210,47 @@ plotUniDists <- function(sample){
   kl2 <- KL(tempMat)
   return(list(data = fullDat, KL = kl2))
   
+}
+
+##create TSP to calculate time
+calcCost_clhs <- function(pnts,objVals,plotTime = 50L, minPerDay = 3L){
+  n = nrow(pnts)
+  p2 <- st_as_sf(pnts)
+  pnts <- pnts[,1]
+  colnames(pnts) <- c("name","geometry")
+  st_geometry(pnts) <- "geometry"
+  startPnts <- st_as_sf(data.frame(name = "Start",geometry = start_sf))
+  pnts <- rbind(pnts, startPnts)
+  pnts2 <- as(pnts, "Spatial")
+  
+  ## create distance matrix between sample points
+  test <- costDistance(trSmall,pnts2,pnts2)
+  dMat2 <- as.matrix(test)
+  dMat2 <- dMat2*60
+  dMat2[is.infinite(dMat2)] <- 1000
+  
+  ##penalty based on quality of points
+  objVals <- max(objVals) - objVals
+  
+  maxTime <- 8L ##hours
+  ## time per transect
+  temp <- dMat2[1:n,1:n]
+  maxDist <- sum(temp[upper.tri(temp)])
+  minPen <- maxDist
+  maxPen <- maxDist * 4
+  objVals <- scales::rescale(objVals, to = c(minPen,maxPen))
+  objVals <- as.integer(objVals)
+  
+  ndays <- as.integer(ceiling(n/minPerDay)+1)
+  
+  pen = objVals
+  
+  indStart <- as.integer(rep(n,ndays))
+  ##run vehicle routing problem from python script
+  ## GCS is global span cost coefficient
+  vrp <- py_mTSP(dat = dMat2,num_days = ndays, start = indStart, end = indStart, 
+                 max_cost = maxTime*60L, plot_time = plotTime, penalty =  pen, arbDepot = F, GSC = 5L)
+  time <- vrp[[2]]
+  totTime <- sum(as.numeric(unlist(time)))
+  return(list(totTime = totTime, nDays = vrp[[3]]))
 }
