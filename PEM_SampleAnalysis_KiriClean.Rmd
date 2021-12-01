@@ -331,7 +331,7 @@ fillspace
   finalise_plot (fillspace, "./figures/samplestofillbins.png",
                           width_pixels=640,
                           height_pixels=450)
-dev.off()
+#dev.off()
 ```
 
 ## Test filling of real data. Add by slice
