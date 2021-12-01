@@ -252,5 +252,5 @@ calcCost_clhs <- function(pnts,objVals,plotTime = 50L, minPerDay = 3L){
                  max_cost = maxTime*60L, plot_time = plotTime, penalty =  pen, arbDepot = F, GSC = 5L)
   time <- vrp[[2]]
   totTime <- sum(as.numeric(unlist(time)))
-  return(totTime)
+  return(list(totTime = totTime, nDays = vrp[[3]]))
 }
