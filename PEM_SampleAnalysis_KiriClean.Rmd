@@ -25,6 +25,7 @@ require(philentropy)
 require(tictoc)
 require(ggpubr)
 require(flextable)
+require(doMC)
 
 ```
 
@@ -33,11 +34,16 @@ The below chunk creates some generic statistical functions
 ```{r source}
 source_python("./mTSP.py")
 
-# require(doParallel)
-# cl <- makePSOCKcluster(detectCores()-4)
-# registerDoParallel(cl)
-library(doMC)
-registerDoMC(10)
+require(doParallel)
+cl <- makePSOCKcluster(detectCores()-2)
+registerDoParallel(cl)
+
+#the following line will create a local 4-node snow cluster
+workers = makeCluster(6, type="SOCK")
+registerDoParallel(workers)
+
+# library(doMC)
+# registerDoMC(10)
 
 source("./SampleAnalysis_functions.R")
 source("./_functions/doc_theme_pem.R")
@@ -47,7 +53,7 @@ Load data and setup covariates
 
 ```{r load data}
 datLocGit <- here("InputData") ## Data
-covLoc <- here("Covariates/Covariates_PemTSP") ## Too big for git data
+covLoc <- here("Covariates") ## Too big for git data
 ### landscape levels covariates
 covars <- paste(covLoc, c("25m_DAH_3Class.tif","25m_LandformClass_Default_Seive4.tif",
                           "25m_MRVBF_Classified_IS64Low6Up2.tif","becRaster.tif"), sep = "/")# ,"DEM_25m.tif"
@@ -211,11 +217,11 @@ slDatSm <- allSLDat[sample(.N,5e5)]
 #   return(X[small,])
 # }
 # 
-# createLHS <- function(X,n){
-#   temp <- clhs(X,size = n,use.cpp = T, iter = 10000, simple = F)
-#   small <- as.matrix(temp$sampled_data)
-#   return(small)
-# }
+createLHS <- function(X,n){
+  temp <- clhs(X,size = n,use.cpp = T, iter = 5000, simple = F)
+  small <- as.matrix(temp$sampled_data)
+  return(small)
+}
 
 createCCLHS <- function(X,n){
   temp <- clhs(X,size = n,cost = ncol(X),use.cpp = T, iter = 5000,simple = F)
@@ -286,7 +292,7 @@ source("./_functions/doc_theme_pem.R")
 fillspace <- ggplot(dat2, aes(x = ID, y = value, colour = variable, size = variable)) +
   geom_line() +
   facet_wrap(.~Label)+
-  ##theme_pem_facet()+
+  theme_pem_facet()+
   scale_color_manual(name = "Source", values = c("black","grey"), labels = c("Map Area","cLHS Sample")) +
   scale_size_manual(name = "Source",values = c(3.2,0.8),labels = c("Actual Distribution","cLHS Sample")) +
   scale_alpha(range = c(0.4, 0.8))+
@@ -330,7 +336,7 @@ Xcost_SL <- Xcost_SL[!is.na(Xcost_SL$twi),]
 transectsPerSlice <- 5
 
 createCCLHS_transect <- function(X,nSlices){
-  xMat <- st_drop_geometry(X)
+  xMat <- sf::st_drop_geometry(X)
   currpoints <- NULL
   pointsPerSlice <- transectsPerSlice
   datOut <- foreach(snum = 1:nSlices,.combine = rbind) %do% {
@@ -382,14 +388,14 @@ createCCLHS_transect_paired <- function(X,nSlices){
 }
 
 maxSlices <- 12
-transectSim_single <- foreach(i = 1:10, .combine = rbind) %dopar% {
+transectSim_single <- foreach(i = 1:10, .combine = rbind) %do% {
   temp <- createCCLHS_transect(Xcost,maxSlices)
   temp[,SimNum := i]
   temp
 }
 transectSim_single[,Type := "Single Transect"]
 
-transectSim_paired <- foreach(i = 1:10, .combine = rbind) %dopar% {
+transectSim_paired <- foreach(i = 1:10, .combine = rbind) %do% {
   temp <- createCCLHS_transect_paired(Xcost,maxSlices)
   temp[,SimNum := i]
   temp
@@ -402,7 +408,9 @@ allTrans[,Type := as.factor(Type)]
 allTrans[,NumTransects := as.factor(NumTransects)]
 
 ggplot(allTrans, aes(x = NumTransects, y = KL, fill = Type)) +
-  geom_boxplot()
+  geom_boxplot()+
+  geom_hline(yintercept=1, linetype="dashed", color = "red") +
+  theme_pem()
 
 ```
 
@@ -448,7 +456,9 @@ datAll <- foreach(nslice = 1:totalSlices, .combine = rbind) %do% {
 }
 
 ggplot(datAll,aes(x = SliceNum, y = KL, group = SliceNum)) +
-  geom_boxplot()
+  geom_boxplot()+
+  geom_hline(yintercept=1, linetype="dashed", color = "black")+
+  theme_pem()
 #dev.off()
 ```
 
@@ -457,7 +467,7 @@ ggplot(datAll,aes(x = SliceNum, y = KL, group = SliceNum)) +
 Instead of just calculating the time cost for different numbers of transects, we can use the TSP to estimate the cost of using each sampling method to fill the variable space. Thus, here we use the number of transects needed to fill the variable space as calculated above, and use the TSP to estimate the cost of each method.
 
 ```{r num}
-numSims <- 5
+numSims <- 10
 
 ## cost_constrained clhs
 timeCCLHS <- function(X,n){
@@ -482,7 +492,7 @@ collectTime2 <- function(X,num, nReps = numSims, plotTime = 45L, minNum = 3L){
           "raster","LearnGeom","dplyr","reticulate","gdistance","scales","clhs")
   # .packages = pkgs,
   #                   .export = c("start_sf","trSmall", "calcCost_clhs")
-  test_res <- foreach(n = 1:nReps, .combine = rbind) %dopar% { #
+  test_res <- foreach(n = 1:nReps, .combine = rbind) %do% { #
                       #reticulate::source_python("mTSP.py")
                       templhs <- timeCCLHS(X,num)
                       dat <- X[templhs$index_samples,]
@@ -501,6 +511,7 @@ transSingleNum <- 10
 transPairedNum <- 6
 transTime <- collectTime2(Xcost,as.integer((transSingleNum * 5)))
 transTime$SType <- "Single Transect"
+transTime2 <- transTime %>% mutate(NumDays = NumDays/2)
 pairedTime <- collectTime2(Xcost,as.integer((transPairedNum * 5)))
 pairedTime$SType <- "Paired Transect"
 ################################################################
@@ -511,13 +522,19 @@ numTimes <- numSinglePts/numNeeded
 singleTime <- collectTime2(Xcost_SL,num = numNeeded,nReps = numSims, plotTime = 2L,minNum = 10L)
 singleTime[,NumDays := NumDays*numTimes]
 singleTime$SType <- "Single Points"
+singleTime2 <- singleTime %>% mutate(NumDays = NumDays/2)
 
-allStats <- rbind(singleTime,transTime,pairedTime)
+allStats <- rbind(singleTime2,transTime2,pairedTime)#
 allStats[,SType := as.factor(SType)]
 allStats[,SType := reorder(SType,NumDays, FUN = function(x){-mean(x)})]
 
 ggplot(allStats,aes(x = SType, y = NumDays)) +
-  geom_boxplot()
+  geom_boxplot()+
+  theme_pem()+
+  ylab("Number of crew-days")+
+  xlab("Sample method")
+
+#mean.days <- 
 
 # SPoint <- as.data.table(SPoint)
 # SPoint[,TSPNum := rep(c(1:nRep),each = nSims)]
@@ -564,120 +581,120 @@ The previous chunks investigated how variable space filling changed with differe
 
 ```{r time cost}
 
-collectTime <- function(X,sampleFun, num){
-  pkgs <- c("Rcpp","LaplacesDemon", "foreach","sf",
-          "raster","LearnGeom","dplyr","reticulate","gdistance","scales","clhs")
-  test_res <- foreach(n = num, .combine = rbind, .packages = pkgs,
-                    .export = c("start_sf","trSmall", "calcCost_clhs")) %dopar% { #
-                      reticulate::source_python("mTSP.py")
-                      templhs <- sampleFun(X,n)
-                      dat <- X[templhs$index_samples,]
-                      if(nrow(dat) > 1){
-                        time <- calcCost_clhs(dat,templhs$final_obj_continuous)
-                        data.frame(Num = n, Cost = time)
-                      }else{
-                        NULL
-                      }
-                      
-                    }
-  return(test_res)
-}
-
-trans <- as.integer(c(5, 10, 15, 20, 25, 30, 35, 40, 45, 50)) ##numbers of transects
-trans <- rep(trans,each = 5) ##replications at each level
-
-LHSTime <- collectTime(X,timeLHS,num = trans)
-LHSTime$Type = "LHS"
-CCLHSTime <- collectTime(Xcost,timeCCLHS,num = trans)
-CCLHSTime$Type = "CCLHS"
-
-##function to choose route of least costly point set
-calcCost_tsp <- function(Xcost,n,nTry){
-  pkgs <- c("Rcpp","sf","data.table","raster","dplyr","reticulate","gdistance","scales","clhs")
-  tspTime <- foreach(i = 1:nTry,.combine = rbind, .packages = pkgs,
-                     .export = c("start_sf","trSmall")) %dopar% {
-    reticulate::source_python("mTSP.py")
-    xMat <- st_drop_geometry(Xcost)
-    temp <- clhs(xMat,size = n,cost = ncol(xMat),iter = 5000,use.cpp = T,simple = F)
-    pnts <- Xcost[temp$index_samples,]
-    pnts <- pnts[,1]
-    colnames(pnts) <- c("name","geometry")
-    st_geometry(pnts) <- "geometry"
-    startPnts <- st_as_sf(data.frame(name = "Start",geometry = start_sf))
-    pnts <- rbind(pnts, startPnts)
-    pnts2 <- as(pnts, "Spatial")
-    ## create distance matrix between sample points
-    test <- costDistance(trSmall,pnts2,pnts2)
-    dMat2 <- as.matrix(test)
-    dMat2 <- dMat2*60
-    dMat2[is.infinite(dMat2)] <- 1000
-    
-    ##penalty based on quality of points
-    objVals <- max(temp$final_obj_continuous) - temp$final_obj_continuous
-    maxTime <- 8L ##hours
-    ## time per transect
-    plotTime <- 50L ##mins
-    temp <- dMat2[1:n,1:n]
-    maxDist <- sum(temp[upper.tri(temp)])
-    minPen <- maxDist
-    maxPen <- maxDist * 4
-    objVals <- scales::rescale(objVals, to = c(minPen,maxPen))
-    objVals <- as.integer(objVals)
-    
-    ndays <- as.integer(ceiling(n/5)+1)
-    pen = objVals
-    
-    indStart <- as.integer(rep(n,ndays))
-    ##run vehicle routing problem from python script
-    ## GCS is global span cost coefficient
-    vrp <- py_mTSP(dat = dMat2,num_days = ndays, start = indStart, end = indStart, 
-                   max_cost = maxTime*60L, plot_time = plotTime, penalty =  pen, arbDepot = F, GSC = 5L)
-    time <- vrp[[2]]
-    totTime <- sum(as.numeric(unlist(time)))
-    num = length(as.numeric(unlist(vrp[[1]])))-2*length(vrp[[1]])
-    data.table(It = i, Cost = totTime, Num = num)
-  }
-  return(min(tspTime$Cost))
-}
-
+# collectTime <- function(X,sampleFun, num){
+#   pkgs <- c("Rcpp","LaplacesDemon", "foreach","sf",
+#           "raster","LearnGeom","dplyr","reticulate","gdistance","scales","clhs")
+#   test_res <- foreach(n = num, .combine = rbind, .packages = pkgs,
+#                     .export = c("start_sf","trSmall", "calcCost_clhs")) %do% { #
+#                       reticulate::source_python("mTSP.py")
+#                       templhs <- sampleFun(X,n)
+#                       dat <- X[templhs$index_samples,]
+#                       if(nrow(dat) > 1){
+#                         time <- calcCost_clhs(dat,templhs$final_obj_continuous)
+#                         data.frame(Num = n, Cost = time)
+#                       }else{
+#                         NULL
+#                       }
+#                       
+#                     }
+#   return(test_res)
+# }
+# 
 # trans <- as.integer(c(5, 10, 15, 20, 25, 30, 35, 40, 45, 50)) ##numbers of transects
 # trans <- rep(trans,each = 5) ##replications at each level
-
-#this part takes a while
-TSPTime <- foreach(n = trans,.combine = rbind) %do% {
-  time <- calcCost_tsp(Xcost,n,8)
-  data.frame(Num = n, Cost = time)
-}
-TSPTime$Type <- "TSP"
-timeAll <- rbind(LHSTime,CCLHSTime,TSPTime)
-timeAll$Cost <- timeAll$Cost/480 ##covert from minutes to 8-hour days
-
-timeAll$Num <- as.factor(timeAll$Num)
-timeAll$Type <- as.factor(timeAll$Type) %>% factor(levels = c( "LHS", "CCLHS", "TSP"))
-
-ggplot(timeAll, aes(x = Num, y = Cost, fill = Type))+
-  geom_boxplot()+
-  scale_y_continuous(name = "Number of 8-hour days", limits=c(0, 15),breaks=seq(0,15,1))+
-  labs(x = "Number of Sample Sites in Sample Plan") +
-  expand_limits(x = 0, y = 0)+
-  scale_fill_discrete (name= 'Method', labels = c('cLHS', 'cost-constrained cLHS',  'Travelling Salesman Optimized')) +
-  theme_light()
-ggsave("./Results/CostsbyTransectMethod.jpeg", device = 'jpeg')
-
-# Time_plot <- ggplot(timeAll, aes(x = Num, y = Cost, fill = Type)) +
-#   geom_boxplot() +
-#   labs(x = "Number of Transects", y = "Time Cost to Sample Sufficient Samples") +
-#   scale_fill_discrete(
-#     guide = guide_legend(reverse = FALSE),
-#     name = 'Sample Method',
-#     labels = c(
-#       'cLHS- cLHS resampled',
-#       'cost cLHS - cLHS resampled',
-#       'cost cLHS systematic resampled'
-#     )
-#   ) +
-#   theme_few()
-# plot(Bfill_transectPlot2)
+# 
+# LHSTime <- collectTime(X,timeLHS,num = trans)
+# LHSTime$Type = "LHS"
+# CCLHSTime <- collectTime(Xcost,timeCCLHS,num = trans)
+# CCLHSTime$Type = "CCLHS"
+# 
+# ##function to choose route of least costly point set
+# calcCost_tsp <- function(Xcost,n,nTry){
+#   pkgs <- c("Rcpp","sf","data.table","raster","dplyr","reticulate","gdistance","scales","clhs")
+#   tspTime <- foreach(i = 1:nTry,.combine = rbind, .packages = pkgs,
+#                      .export = c("start_sf","trSmall")) %do% {
+#     reticulate::source_python("mTSP.py")
+#     xMat <- st_drop_geometry(Xcost)
+#     temp <- clhs(xMat,size = n,cost = ncol(xMat),iter = 5000,use.cpp = T,simple = F)
+#     pnts <- Xcost[temp$index_samples,]
+#     pnts <- pnts[,1]
+#     colnames(pnts) <- c("name","geometry")
+#     st_geometry(pnts) <- "geometry"
+#     startPnts <- st_as_sf(data.frame(name = "Start",geometry = start_sf))
+#     pnts <- rbind(pnts, startPnts)
+#     pnts2 <- as(pnts, "Spatial")
+#     ## create distance matrix between sample points
+#     test <- costDistance(trSmall,pnts2,pnts2)
+#     dMat2 <- as.matrix(test)
+#     dMat2 <- dMat2*60
+#     dMat2[is.infinite(dMat2)] <- 1000
+#     
+#     ##penalty based on quality of points
+#     objVals <- max(temp$final_obj_continuous) - temp$final_obj_continuous
+#     maxTime <- 8L ##hours
+#     ## time per transect
+#     plotTime <- 50L ##mins
+#     temp <- dMat2[1:n,1:n]
+#     maxDist <- sum(temp[upper.tri(temp)])
+#     minPen <- maxDist
+#     maxPen <- maxDist * 4
+#     objVals <- scales::rescale(objVals, to = c(minPen,maxPen))
+#     objVals <- as.integer(objVals)
+#     
+#     ndays <- as.integer(ceiling(n/5)+1)
+#     pen = objVals
+#     
+#     indStart <- as.integer(rep(n,ndays))
+#     ##run vehicle routing problem from python script
+#     ## GCS is global span cost coefficient
+#     vrp <- py_mTSP(dat = dMat2,num_days = ndays, start = indStart, end = indStart, 
+#                    max_cost = maxTime*60L, plot_time = plotTime, penalty =  pen, arbDepot = F, GSC = 5L)
+#     time <- vrp[[2]]
+#     totTime <- sum(as.numeric(unlist(time)))
+#     num = length(as.numeric(unlist(vrp[[1]])))-2*length(vrp[[1]])
+#     data.table(It = i, Cost = totTime, Num = num)
+#   }
+#   return(min(tspTime$Cost))
+# }
+# 
+# # trans <- as.integer(c(5, 10, 15, 20, 25, 30, 35, 40, 45, 50)) ##numbers of transects
+# # trans <- rep(trans,each = 5) ##replications at each level
+# 
+# #this part takes a while
+# TSPTime <- foreach(n = trans,.combine = rbind) %do% {
+#   time <- calcCost_tsp(Xcost,n,8)
+#   data.frame(Num = n, Cost = time)
+# }
+# TSPTime$Type <- "TSP"
+# timeAll <- rbind(LHSTime,CCLHSTime,TSPTime)
+# timeAll$Cost <- timeAll$Cost/480 ##covert from minutes to 8-hour days
+# 
+# timeAll$Num <- as.factor(timeAll$Num)
+# timeAll$Type <- as.factor(timeAll$Type) %>% factor(levels = c( "LHS", "CCLHS", "TSP"))
+# 
+# ggplot(timeAll, aes(x = Num, y = Cost, fill = Type))+
+#   geom_boxplot()+
+#   scale_y_continuous(name = "Number of 8-hour days", limits=c(0, 15),breaks=seq(0,15,1))+
+#   labs(x = "Number of Sample Sites in Sample Plan") +
+#   expand_limits(x = 0, y = 0)+
+#   scale_fill_discrete (name= 'Method', labels = c('cLHS', 'cost-constrained cLHS',  'Travelling Salesman Optimized')) +
+#   theme_light()
+# ggsave("./Results/CostsbyTransectMethod.jpeg", device = 'jpeg')
+# 
+# # Time_plot <- ggplot(timeAll, aes(x = Num, y = Cost, fill = Type)) +
+# #   geom_boxplot() +
+# #   labs(x = "Number of Transects", y = "Time Cost to Sample Sufficient Samples") +
+# #   scale_fill_discrete(
+# #     guide = guide_legend(reverse = FALSE),
+# #     name = 'Sample Method',
+# #     labels = c(
+# #       'cLHS- cLHS resampled',
+# #       'cost cLHS - cLHS resampled',
+# #       'cost cLHS systematic resampled'
+# #     )
+# #   ) +
+# #   theme_few()
+# # plot(Bfill_transectPlot2)
 ```
 
 ## Example TSP Route
