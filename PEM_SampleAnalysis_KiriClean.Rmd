@@ -32,7 +32,7 @@ require(doMC)
 The below chunk creates some generic statistical functions
 
 ```{r source}
-source_python("./mTSP.py")
+source_python("./_functions/mTSP.py")
 
 require(doParallel)
 cl <- makePSOCKcluster(detectCores()-2)
@@ -45,9 +45,69 @@ registerDoParallel(workers)
 # library(doMC)
 # registerDoMC(10)
 
-source("./SampleAnalysis_functions.R")
+source("./_functions/SampleAnalysis_functions.R")
 source("./_functions/doc_theme_pem.R")
 ```
+```{r setup, echo = FALSE,  warning=FALSE, message = FALSE, results = FALSE}
+knitr::opts_chunk$set(echo = FALSE, warning=FALSE, message = FALSE, results = FALSE, 
+                      knitr.table.format = "html", fig.width=8, fig.asp = 0.8, out.width = "80%", dev = 'png', dpi = 600,
+                      fig.path = 'output/figures/')
+
+```
+```{r graphics defaults,  results = 'hide'}
+set_flextable_defaults(
+  font.family = "Helvetica", 
+  font.size = 9,
+  font.color = "black",
+  table.layout = "fixed",
+  digits = 0,
+  text.align ="centre"#,
+  #theme_fun = "theme_vanilla"
+  )
+
+ggplot2::theme_set(theme_pem())
+##GUI for chosing colourspace palettes
+# choose_palette()
+# hclwizard()
+
+colorspace::sequential_hcl(palette = "Grays", n = 4, h = 0, c = c(0, NA, NA), l = c(20, 80), power = 1.3, rev = TRUE, fixup = FALSE, register = "Gray4Class")
+
+# flex.default <- set_flextable_defaults(
+#   font.family = "Helvetica",
+#   font.size = 10,
+#   font.color = NULL,
+#   text.align = NULL,
+#   padding = NULL,
+#   padding.bottom = NULL,
+#   padding.top = NULL,
+#   padding.left = NULL,
+#   padding.right = NULL,
+#   border.color = NULL,
+#   background.color = NULL,
+#   line_spacing = NULL,
+#   table.layout = NULL,
+#   cs.family = NULL,
+#   eastasia.family = NULL,
+#   hansi.family = NULL,
+#   decimal.mark = NULL,
+#   big.mark = NULL,
+#   digits = NULL,
+#   na_str = NULL,
+#   nan_str = NULL,
+#   fmt_date = NULL,
+#   fmt_datetime = NULL,
+#   extra_css = NULL,
+#   fonts_ignore = NULL,
+#   theme_fun = NULL,
+#   post_process_pdf = NULL,
+#   post_process_docx = NULL,
+#   post_process_html = NULL,
+#   post_process_pptx = NULL
+# )
+
+
+```
+
 
 Load data and setup covariates
 
@@ -255,7 +315,7 @@ temp <- statsAll[,.(y = median(KL)), by = .(Num)]
 #temp[,`:=`(y = (y-min(y))/(max(y)-min(y)), Num = as.numeric(as.character(Num)))]
 temp[,`:=`(Num = as.numeric(as.character(Num)))]
 numPoints <- temp[,.(nPoints = predict(loess(Num ~ y,data = .SD), data.frame(y = KLCutoff)))]
-numSinglePts <- numPoints$nPoints[1]
+numSinglePts <- numPoints$nPoints[1] %>% round(0)
 
 ```
 
@@ -264,9 +324,10 @@ numSinglePts <- numPoints$nPoints[1]
 ```{r univariate distributions}
 s1 <- createLHS(ancVals,100)
 s2 <- createLHS(ancVals,500)
-s3 <- createLHS(ancVals,2500)
-s4 <- createLHS(ancVals,5000)
-
+s3 <- createLHS(ancVals,1000)
+s4 <- createLHS(ancVals,2000)
+s5 <- createLHS(ancVals,3000)
+s6 <- createLHS(ancVals,4000)
 temp <- plotUniDists(s1)
 t1 <- temp$data
 t1[,NumSamples := 100]
@@ -277,13 +338,23 @@ t2[,NumSamples := 500]
 t2[,Label := paste0("500 Samples\nKL = ",round(temp$KL, digits = 3))]
 temp <- plotUniDists(s3)
 t3 <- temp$data
-t3[,NumSamples := 2500]
-t3[,Label := paste0(" 2500 Samples\nKL = ",round(temp$KL, digits = 3))]
+t3[,NumSamples := 1000]
+t3[,Label := paste0("1000 Samples\nKL = ",round(temp$KL, digits = 3))]
 temp <- plotUniDists(s4)
 t4 <- temp$data
-t4[,NumSamples := 5000]
-t4[,Label := paste0(" 5000 Samples\nKL = ",round(temp$KL, digits = 3))]
-dat <- rbind(t1,t2,t3,t4)
+t4[,NumSamples := 2000]
+t4[,Label := paste0("2000 Samples\nKL = ",round(temp$KL, digits = 3))]
+temp <- plotUniDists(s6)
+t5 <- temp$data
+t5[,NumSamples := 3000]
+t5[,Label := paste0("3000 Samples\nKL = ",round(temp$KL, digits = 3))]
+
+temp <- plotUniDists(s6)
+t6 <- temp$data
+t6[,NumSamples := 4000]
+t6[,Label := paste0("4000 Samples\nKL = ",round(temp$KL, digits = 3))]
+
+dat <- rbind(t1,t2,t3,t4,t5,t6)
 dat[,Label := as.factor(Label)]
 dat[,Label := reorder(Label,NumSamples)]
 
@@ -298,10 +369,17 @@ fillspace <- ggplot(dat2, aes(x = ID, y = value, colour = variable, size = varia
   scale_alpha(range = c(0.4, 0.8))+
   labs(x = "Multivariate Bins", y = "Bin ratio of total map area")
 fillspace
-  finalise_plot (fillspace, "./figures/samplestofillbins.png",
+  finalise_plot (fillspace, "D:/GitHub/PEM_Methods_DevX/PEM_standards_manuscripts/outputs/ptsamplestofillbins.png",
                           width_pixels=640,
                           height_pixels=450)
 #dev.off()
+  # require(CDFt)
+  # test <- dat %>% dplyr::filter(Label == "50000 Samples\nKL = 0.048") %>% select(ID,Num, SampNum)
+  #  res <- ks.test(test$Num,test$SampNum)
+  #  res$p.value
+  # res <- CramerVonMisesTwoSamples(test$Num, test$SampNum)
+  # p_value = 1/6*exp(-res) %>% as.integer
+  # p_value
 ```
 
 
@@ -387,7 +465,7 @@ createCCLHS_transect_paired <- function(X,nSlices){
   return(datOut)
 }
 
-maxSlices <- 12
+maxSlices <- 15
 transectSim_single <- foreach(i = 1:10, .combine = rbind) %do% {
   temp <- createCCLHS_transect(Xcost,maxSlices)
   temp[,SimNum := i]
@@ -407,62 +485,45 @@ allTrans[,NumTransects := SliceNum * transectsPerSlice]
 allTrans[,Type := as.factor(Type)]
 allTrans[,NumTransects := as.factor(NumTransects)]
 
-ggplot(allTrans, aes(x = NumTransects, y = KL, fill = Type)) +
+num.transects <- ggplot(allTrans, aes(x = NumTransects, y = KL, fill = Type)) +
   geom_boxplot()+
-  geom_hline(yintercept=1, linetype="dashed", color = "red") +
+  geom_hline(yintercept=1.3, linetype="dashed", color = "black") +
+  scale_fill_grey(start = 0.5)+
   theme_pem()
+num.transects
 
+finalise_plot (num.transects, "D:/GitHub/PEM_Methods_DevX/PEM_standards_manuscripts/outputs/num.transects.png",
+                          width_pixels=640,
+                          height_pixels=450)
 ```
 
 ## Calculate number of sites to fill
 
 ```{r num points}
-KLCutoff <- 1.3
+KLCutoff <- 1.25
 statsAll2 <- as.data.table(allTrans)
 temp <- statsAll2[,.(y = median(KL)), by = .(Type,SliceNum)]
 temp[,`:=`(SliceNum = as.numeric(as.character(SliceNum)))]
-numTrans <- temp[,.(nSlice = predict(loess(SliceNum ~ y,data = .SD), data.frame(y = KLCutoff))), by = .(Type)]
+numTrans <- temp[,.(nSlice = predict(loess(SliceNum ~ y,data = .SD), data.frame(y = KLCutoff))), by = .(Type)] 
+numTrans$nSlice <-   round(numTrans$nSlice, 0)
 
-knitr::kable(numTrans, digits = 2, caption = paste0("Number of slices for KL divergence = ",KLCutoff))
+#knitr::kable(numTrans, digits = 2, caption = paste0("Number of slices for KL divergence = ",KLCutoff))
 
-transSingleNum <- 10
-transPairedNum <- 6
+transSingleNum <- numTrans$nSlice[1] %>% round(0)
+transPairedNum <- numTrans$nSlice[2] %>% round(0)
+numSinglePts$Type <- "Single Points" 
+numSinglePts <- numSinglePts %>% as.data.frame %>% rename(nSlice = 1) %>% select(Type, nSlice)
+MinSample <- rbind(numSinglePts, numTrans ) %>% rename("Sample_Type" = Type, "Min._Sample_Units" = nSlice)
+MinSample$Min._Sample_Units <- round(MinSample$Min._Sample_Units,0)
+
+MinSample_flex <- flextable(MinSample) %>% autofit()# %>%  align(align = "center", part = "all") %>% set_table_properties(width = .5, layout = "autofit")
+MinSample_flex
+save_as_docx(MinSample_flex , path = "D:/GitHub/PEM_Methods_DevX/PEM_standards_manuscripts/outputs/MinimumSampleNumber_KL125.docx")
+
 ```
 
-## Test filling of real data. Add by slice
 
-```{r}
-library(velox)
-ancDatVL <- velox(ancDatSL)
-
-s1Dat <- fread("./InputData/s1_clean_pts_all_fnf.csv")
-numTrans <- unique(s1Dat[,.(slice,transect_id)])
-numTrans <- numTrans[,.(Num = .N), by = .(slice)]
-s1Dat <- s1Dat[,.(x,y,ID,mapunit1, slice)]
-setnames(s1Dat, old = "mapunit1", new = "Unit")
-s1Points <- st_as_sf(s1Dat,coords = c("x","y"), crs = 3005)
-totalSlices <- max(s1Points$slice)
-
-##all slice combinations
-datAll <- foreach(nslice = 1:totalSlices, .combine = rbind) %do% {
-  cat(".")
-  allComb <- combn(1:totalSlices,m = nslice)
-  out <- foreach(i = 1:ncol(allComb), .combine = rbind) %do% {
-    sample <- s1Points[s1Points$slice %in% allComb[,i],]
-    samp2 <- as.data.table(ancDatVL$extract_points(sample)[,1:7])
-    data.table(SliceNum = nslice,Iter = i, KL = suppressMessages(KL_stat_noextra(sample = samp2, ancSmall = ancSmall)), BinFill = binfill_clhs(sample = samp2, ancSmall = ancSmall))
-  }
-  out
-}
-
-ggplot(datAll,aes(x = SliceNum, y = KL, group = SliceNum)) +
-  geom_boxplot()+
-  geom_hline(yintercept=1, linetype="dashed", color = "black")+
-  theme_pem()
-#dev.off()
-```
-
-## Time to fill variable space
+## Simulations Time to fill variable space
 
 Instead of just calculating the time cost for different numbers of transects, we can use the TSP to estimate the cost of using each sampling method to fill the variable space. Thus, here we use the number of transects needed to fill the variable space as calculated above, and use the TSP to estimate the cost of each method.
 
@@ -507,16 +568,16 @@ collectTime2 <- function(X,num, nReps = numSims, plotTime = 45L, minNum = 3L){
   return(test_res)
 }
 
-transSingleNum <- 10
-transPairedNum <- 6
+#transSingleNum <- 10 ## ASSIGNED ABOVE
+#transPairedNum <- 5## ASSIGNED ABOVE
 transTime <- collectTime2(Xcost,as.integer((transSingleNum * 5)))
 transTime$SType <- "Single Transect"
 transTime2 <- transTime %>% mutate(NumDays = NumDays/2)
 pairedTime <- collectTime2(Xcost,as.integer((transPairedNum * 5)))
 pairedTime$SType <- "Paired Transect"
 ################################################################
-##single points
-numSinglePts <- 1700
+##single points 
+#numSinglePts <- 1700 ##from script above
 numNeeded <- 100L
 numTimes <- numSinglePts/numNeeded
 singleTime <- collectTime2(Xcost_SL,num = numNeeded,nReps = numSims, plotTime = 2L,minNum = 10L)
@@ -528,11 +589,25 @@ allStats <- rbind(singleTime2,transTime2,pairedTime)#
 allStats[,SType := as.factor(SType)]
 allStats[,SType := reorder(SType,NumDays, FUN = function(x){-mean(x)})]
 
-ggplot(allStats,aes(x = SType, y = NumDays)) +
+samplecost <- ggplot(allStats,aes(x = SType, y = NumDays)) +
   geom_boxplot()+
   theme_pem()+
   ylab("Number of crew-days")+
   xlab("Sample method")
+samplecost
+  
+finalise_plot (samplecost, "./Results/coststofillhypercube.png",
+                          width_pixels=640,
+                          height_pixels=450)
+## flextable of costs
+temp2 <- allStats[,.(y = mean(NumDays)), by = .(SType)]
+#temp2[,`:=`(SliceNum = as.numeric(as.character(SliceNum)))]
+
+Min.sample.costs <- cbind(MinSample, temp2) %>% select(-3) %>% rename(mean_crew_days = 3) 
+Min.sample.costs$mean_crew_days <- round(Min.sample.costs$mean_crew_days, 0)
+Min.sample.costs_flex <- flextable(Min.sample.costs) %>% align(align = "center", part = "all") %>% set_table_properties(width = .5, layout = "autofit")
+Min.sample.costs_flex
+save_as_docx(Min.sample.costs_flex , path = "D:/GitHub/PEM_Methods_DevX/PEM_standards_manuscripts/outputs/Costs_MinimumSampleNumber_KL125.docx")
 
 #mean.days <- 
 
@@ -574,130 +649,49 @@ ggplot(allStats,aes(x = SType, y = NumDays)) +
 # ggsave("./Results/CostsTransectvsPointsMethod.jpeg", device = 'jpeg', width = 4, height = 4)
 ```
 
+## Test filling of real sample data from Deception Lake Study area. Add by slice
 
-## Simulation 3: Sampling Time
+```{r}
+library(velox)
+ancDatVL <- velox(ancDatSL)
 
-The previous chunks investigated how variable space filling changed with different sampling strategies. We now apply the same process, but collect results on the amount of time each plan would take (as determined by the TSP). We use similar sampling plans as in the above chunks: cost-constrained clhs, regular clhs, and TSP (cost-constrained clhs optimised using the TSP). First, we run the simulations as above, with  increasing numbers of transects and multiple replications at each level. We then simulate the cost to fill the variable space to KL = 1 as calculated above, using each of these methods, and present a sample TSP route.
+s1Dat <- fread("./InputData/s1_clean_pts_all_fnf.csv")
+numTrans <- unique(s1Dat[,.(slice,transect_id)])
+numTrans <- numTrans[,.(Num = .N), by = .(slice)]
+s1Dat <- s1Dat[,.(x,y,ID,mapunit1, slice)]
+setnames(s1Dat, old = "mapunit1", new = "Unit")
+s1Points <- st_as_sf(s1Dat,coords = c("x","y"), crs = 3005)
+totalSlices <- max(s1Points$slice)
 
-```{r time cost}
+##all slice combinations
+datAll <- foreach(nslice = 1:totalSlices, .combine = rbind) %do% {
+  cat(".")
+  allComb <- combn(1:totalSlices,m = nslice)
+  out <- foreach(i = 1:ncol(allComb), .combine = rbind) %do% {
+    sample <- s1Points[s1Points$slice %in% allComb[,i],]
+    samp2 <- as.data.table(ancDatVL$extract_points(sample)[,1:7])
+    data.table(SliceNum = nslice,Iter = i, KL = suppressMessages(KL_stat_noextra(sample = samp2, ancSmall = ancSmall)), BinFill = binfill_clhs(sample = samp2, ancSmall = ancSmall))
+  }
+  out
+}
 
-# collectTime <- function(X,sampleFun, num){
-#   pkgs <- c("Rcpp","LaplacesDemon", "foreach","sf",
-#           "raster","LearnGeom","dplyr","reticulate","gdistance","scales","clhs")
-#   test_res <- foreach(n = num, .combine = rbind, .packages = pkgs,
-#                     .export = c("start_sf","trSmall", "calcCost_clhs")) %do% { #
-#                       reticulate::source_python("mTSP.py")
-#                       templhs <- sampleFun(X,n)
-#                       dat <- X[templhs$index_samples,]
-#                       if(nrow(dat) > 1){
-#                         time <- calcCost_clhs(dat,templhs$final_obj_continuous)
-#                         data.frame(Num = n, Cost = time)
-#                       }else{
-#                         NULL
-#                       }
-#                       
-#                     }
-#   return(test_res)
-# }
-# 
-# trans <- as.integer(c(5, 10, 15, 20, 25, 30, 35, 40, 45, 50)) ##numbers of transects
-# trans <- rep(trans,each = 5) ##replications at each level
-# 
-# LHSTime <- collectTime(X,timeLHS,num = trans)
-# LHSTime$Type = "LHS"
-# CCLHSTime <- collectTime(Xcost,timeCCLHS,num = trans)
-# CCLHSTime$Type = "CCLHS"
-# 
-# ##function to choose route of least costly point set
-# calcCost_tsp <- function(Xcost,n,nTry){
-#   pkgs <- c("Rcpp","sf","data.table","raster","dplyr","reticulate","gdistance","scales","clhs")
-#   tspTime <- foreach(i = 1:nTry,.combine = rbind, .packages = pkgs,
-#                      .export = c("start_sf","trSmall")) %do% {
-#     reticulate::source_python("mTSP.py")
-#     xMat <- st_drop_geometry(Xcost)
-#     temp <- clhs(xMat,size = n,cost = ncol(xMat),iter = 5000,use.cpp = T,simple = F)
-#     pnts <- Xcost[temp$index_samples,]
-#     pnts <- pnts[,1]
-#     colnames(pnts) <- c("name","geometry")
-#     st_geometry(pnts) <- "geometry"
-#     startPnts <- st_as_sf(data.frame(name = "Start",geometry = start_sf))
-#     pnts <- rbind(pnts, startPnts)
-#     pnts2 <- as(pnts, "Spatial")
-#     ## create distance matrix between sample points
-#     test <- costDistance(trSmall,pnts2,pnts2)
-#     dMat2 <- as.matrix(test)
-#     dMat2 <- dMat2*60
-#     dMat2[is.infinite(dMat2)] <- 1000
-#     
-#     ##penalty based on quality of points
-#     objVals <- max(temp$final_obj_continuous) - temp$final_obj_continuous
-#     maxTime <- 8L ##hours
-#     ## time per transect
-#     plotTime <- 50L ##mins
-#     temp <- dMat2[1:n,1:n]
-#     maxDist <- sum(temp[upper.tri(temp)])
-#     minPen <- maxDist
-#     maxPen <- maxDist * 4
-#     objVals <- scales::rescale(objVals, to = c(minPen,maxPen))
-#     objVals <- as.integer(objVals)
-#     
-#     ndays <- as.integer(ceiling(n/5)+1)
-#     pen = objVals
-#     
-#     indStart <- as.integer(rep(n,ndays))
-#     ##run vehicle routing problem from python script
-#     ## GCS is global span cost coefficient
-#     vrp <- py_mTSP(dat = dMat2,num_days = ndays, start = indStart, end = indStart, 
-#                    max_cost = maxTime*60L, plot_time = plotTime, penalty =  pen, arbDepot = F, GSC = 5L)
-#     time <- vrp[[2]]
-#     totTime <- sum(as.numeric(unlist(time)))
-#     num = length(as.numeric(unlist(vrp[[1]])))-2*length(vrp[[1]])
-#     data.table(It = i, Cost = totTime, Num = num)
-#   }
-#   return(min(tspTime$Cost))
-# }
-# 
-# # trans <- as.integer(c(5, 10, 15, 20, 25, 30, 35, 40, 45, 50)) ##numbers of transects
-# # trans <- rep(trans,each = 5) ##replications at each level
-# 
-# #this part takes a while
-# TSPTime <- foreach(n = trans,.combine = rbind) %do% {
-#   time <- calcCost_tsp(Xcost,n,8)
-#   data.frame(Num = n, Cost = time)
-# }
-# TSPTime$Type <- "TSP"
-# timeAll <- rbind(LHSTime,CCLHSTime,TSPTime)
-# timeAll$Cost <- timeAll$Cost/480 ##covert from minutes to 8-hour days
-# 
-# timeAll$Num <- as.factor(timeAll$Num)
-# timeAll$Type <- as.factor(timeAll$Type) %>% factor(levels = c( "LHS", "CCLHS", "TSP"))
-# 
-# ggplot(timeAll, aes(x = Num, y = Cost, fill = Type))+
-#   geom_boxplot()+
-#   scale_y_continuous(name = "Number of 8-hour days", limits=c(0, 15),breaks=seq(0,15,1))+
-#   labs(x = "Number of Sample Sites in Sample Plan") +
-#   expand_limits(x = 0, y = 0)+
-#   scale_fill_discrete (name= 'Method', labels = c('cLHS', 'cost-constrained cLHS',  'Travelling Salesman Optimized')) +
-#   theme_light()
-# ggsave("./Results/CostsbyTransectMethod.jpeg", device = 'jpeg')
-# 
-# # Time_plot <- ggplot(timeAll, aes(x = Num, y = Cost, fill = Type)) +
-# #   geom_boxplot() +
-# #   labs(x = "Number of Transects", y = "Time Cost to Sample Sufficient Samples") +
-# #   scale_fill_discrete(
-# #     guide = guide_legend(reverse = FALSE),
-# #     name = 'Sample Method',
-# #     labels = c(
-# #       'cLHS- cLHS resampled',
-# #       'cost cLHS - cLHS resampled',
-# #       'cost cLHS systematic resampled'
-# #     )
-# #   ) +
-# #   theme_few()
-# # plot(Bfill_transectPlot2)
+datAll$SliceNum <- as.factor(datAll$SliceNum)
+fieldslicecovariate <- ggplot(datAll,aes(x = SliceNum, y = KL, group = SliceNum)) +
+  geom_boxplot()+
+  geom_hline(yintercept=1.25, linetype="dashed", color = "black")+
+  theme_pem() +
+  ylab("Kullback-Leibler Distance")+
+  scale_x_discrete("Number of paired transect slices", labels = c("1" = "3","2" = "6", "3" = "9","4" = "12","5" = "15", "6" = "18"))
+
+fieldslicecovariate 
+
+  finalise_plot (fieldslicecovariate, "D:/GitHub/PEM_Methods_DevX/PEM_standards_manuscripts/outputs/fieldslicestofillbins.jpg",
+                          width_pixels=450,
+                          height_pixels=450)
+#dev.off()
 ```
 
-## Example TSP Route
+## Map and example TSP Route
 
 ```{r tsp_example}
 n = 25
@@ -761,7 +755,7 @@ paths <- foreach(j = 0:(length(result)-1), .combine = rbind) %do% {
 
 paths <- st_transform(paths, 3005)
 #st_write(paths, dsn = "RoadTSP.gpkg", layer = "Paths", append = T, driver = "GPKG")  
-
+jpeg(file="D:/GitHub/PEM_Methods_DevX/PEM_standards_manuscripts/outputs/VRP_example_map.jpg", width=600, height=480)
 plot(acost2)
 plot(pnts,col = "black", add = T)
 plot(paths,col = as.factor(paths$DropSite), add = T)
@@ -779,6 +773,9 @@ for(i in 0:(length(result)-1)){
   p2$Order[p1] <- 1:length(p1)
 }
 p2 <- st_transform(p2, 3005)
+
+p2
+dev.off()
 
 
 ```
